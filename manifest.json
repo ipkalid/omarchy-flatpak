@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "ipkalid.flatpak-store",
+  "name": "Flatpak Store",
+  "version": "1.0.0",
+  "author": "Khalid Alhazmi",
+  "license": "MIT",
+  "description": "Install, remove, and update system Flatpak apps with familiar Omarchy terminal pickers.",
+  "kinds": ["panel"],
+  "entryPoints": {"panel": "Panel.qml"}
+}

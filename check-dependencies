@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Read-only probe; works without Python or Flatpak installed.
+set -eu
+printf '{'
+separator=''
+for dependency in flatpak fzf python3; do
+  available=false
+  if command -v "$dependency" >/dev/null 2>&1; then available=true; fi
+  printf '%s"%s":%s' "$separator" "$dependency" "$available"
+  separator=,
+done
+printf '}\n'

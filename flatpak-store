@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# Install, remove, or update applications in the system installation.
+set -euo pipefail
+
+# fzf invokes this mode for the highlighted row; it only reads app metadata.
+show_preview() {
+  local action=$1 ref=$2 name=$3 description=$4 installed=$5 metadata
+  [[ $action == install || $action == remove ]] || return 2
+  [[ $ref =~ ^app/[A-Za-z0-9._-]+/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$ ]] || return 2
+  local app_id arch branch
+  IFS=/ read -r _ app_id arch branch <<<"$ref"
+  local -a query=(info --system "$ref")
+  if [[ $action == install ]]; then query=(remote-info --system --cached flathub "$ref"); fi
+  local status='Not installed' details_error=0
+  if [[ $action == remove || -n $installed ]]; then status=Installed; fi
+  metadata=$(LC_ALL=C timeout 15s flatpak "${query[@]}" 2>&1) || details_error=1
+  # Labels follow pacman/yay's left-aligned package preview rather than Flatpak's
+  # right-aligned raw output. Omit commit hashes and other repository internals.
+  printf '%-15s : %s\n' 'Name' "${name:-$app_id}"
+  if (( details_error == 0 )); then
+    printf '%s\n' "$metadata" | awk '
+      /^[[:space:]]*Version:/ { sub(/^[[:space:]]*Version:[[:space:]]*/, ""); printf "%-15s : %s\n", "Version", $0 }
+    '
+  fi
+  printf '%-15s : %s\n' 'Description' "${description:-Not provided}" \
+    'Application ID' "$app_id" 'Architecture' "$arch" 'Branch' "$branch" \
+    'Installation' 'System' 'Status' "$status"
+  if [[ $action == install ]]; then printf '%-15s : %s\n' 'Repository' 'flathub'; fi
+  if (( details_error == 0 )); then
+    printf '%s\n' "$metadata" | awk '
+      /^[[:space:]]*(License|Origin|Installed Size|Runtime|Sdk|Date):/ {
+        key=$0; sub(/:.*/, "", key); sub(/^[[:space:]]*/, "", key)
+        value=$0; sub(/^[^:]*:[[:space:]]*/, "", value)
+        if (key == "Origin") key="Repository"
+        if (key == "Sdk") key="SDK"
+        printf "%-15s : %s\n", key, value
+      }
+    '
+  else
+    printf '\nAdditional details are unavailable.\n'
+  fi
+}
+
+if [[ ${1:-} == --preview ]]; then
+  [[ $# == 6 ]] || exit 2
+  show_preview "$2" "$3" "$4" "$5" "$6"
+  exit
+fi
+
+finish() {
+  local status=$?
+  trap - EXIT
+  [[ -z ${work_dir:-} ]] || rm -rf -- "$work_dir"
+  if [[ -t 0 && -t 1 && ${pause_on_exit:-0} == 1 ]]; then
+    read -r -p $'\nPress Enter to close… ' _ || true
+  fi
+  exit "$status"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if (( $# > 1 )); then
+  printf 'Usage: flatpak-store [remove|update]\n' >&2
+  exit 2
+fi
+mode=install
+case ${1:-} in
+  --help|-h)
+    printf '%s\n' 'Usage: flatpak-store [remove|update]' \
+      'Default: search and install system Flathub apps.' \
+      'remove: select installed system apps for removal; saved app data is retained.' \
+      'update: update all system apps and runtimes with Flatpak confirmation.' \
+      'Tab selects, Enter opens Flatpak confirmation, Escape cancels.'
+    exit 0 ;;
+  remove) mode=remove ;;
+  update) mode=update ;;
+  '') ;;
+  *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
+esac
+
+pause_on_exit=1
+if [[ $mode == update ]]; then
+  if ! command -v flatpak >/dev/null 2>&1; then
+    printf 'Missing dependency: flatpak\nInstall it with: omarchy pkg add flatpak\n' >&2
+    exit 1
+  fi
+  printf 'Updating system Flatpak apps and runtimes…\n'
+  if flatpak update --system; then
+    printf '\nFlatpak finished.\n'
+  else
+    status=$?
+    printf '\nFlatpak update did not complete successfully (exit %s). See the details above.\n' "$status" >&2
+    exit "$status"
+  fi
+  exit 0
+fi
+
+for dependency in flatpak fzf timeout awk mktemp; do
+  if ! command -v "$dependency" >/dev/null 2>&1; then
+    printf 'Missing dependency: %s\nInstall flatpak and fzf with: omarchy pkg add flatpak fzf\n' "$dependency" >&2
+    exit 1
+  fi
+done
+
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/flatpak-store.XXXXXXXX")
+load_install_catalog() {
+  if ! flatpak remotes --system --columns=name >"$work_dir/remotes"; then
+    printf 'Could not read system Flatpak remotes.\n' >&2
+    exit 1
+  fi
+  if ! awk '$0 == "flathub" { found=1 } END { exit !found }' "$work_dir/remotes"; then
+    printf '%s\n' 'System Flathub is not configured. Add it with:' \
+      'flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo' >&2
+    exit 1
+  fi
+
+  printf 'Loading Flathub applications…\n'
+  catalog_options=(--system --app '--columns=ref,name,description')
+  catalog_notice=''
+  if ! timeout 45s flatpak remote-ls "${catalog_options[@]}" flathub \
+      >"$work_dir/catalog" 2>"$work_dir/error"; then
+    cat "$work_dir/error" >&2
+    printf 'Could not refresh Flathub. Trying the local cache…\n' >&2
+    if ! timeout 15s flatpak remote-ls "${catalog_options[@]}" --cached flathub >"$work_dir/catalog"; then
+      printf 'No catalog available. Check your connection and try again.\n' >&2
+      exit 1
+    fi
+    catalog_notice='OFFLINE / STALE CACHE · Flathub · installation needs a connection'
+  fi
+  if [[ ! -s $work_dir/catalog ]]; then
+    printf 'Flathub returned no applications. Check the remote and try again.\n' >&2
+    exit 1
+  fi
+  if ! flatpak list --system --app --columns=ref >"$work_dir/installed"; then
+    printf 'Could not determine installed apps. Try again after resolving the Flatpak error.\n' >&2
+    exit 1
+  fi
+
+  # flatpak list omits the app/ prefix that remote-ls includes.
+  awk -F '\t' 'FILENAME == ARGV[1] {
+    ref=$1; sub(/^app\//, "", ref); installed[ref]=1; next
+  } {
+    ref=$1; sub(/^app\//, "", ref)
+    printf "%s\t%s\t%s\t%s\n", $1, $2, $3, (ref in installed ? "[installed]" : "")
+  }' "$work_dir/installed" "$work_dir/catalog" >"$work_dir/rows"
+}
+
+if [[ $mode == remove ]]; then
+  printf 'Loading installed system applications…\n'
+  if ! flatpak list --system --app --columns=ref,name,description >"$work_dir/installed"; then
+    printf 'Could not list installed apps. Resolve the Flatpak error and try again.\n' >&2
+    exit 1
+  fi
+  if [[ ! -s $work_dir/installed ]]; then
+    printf 'No system Flatpak applications are installed.\n'
+    exit 0
+  fi
+  # Normalize list output to the full app refs used for validation and removal.
+  awk '{ if ($0 !~ /^app\//) printf "app/"; print }' "$work_dir/installed" >"$work_dir/catalog"
+  cp "$work_dir/catalog" "$work_dir/rows"
+  catalog_notice=''
+  picker_color='pointer:red,marker:red'
+  operation=(uninstall --system --app)
+else
+  load_install_catalog
+  picker_color='pointer:green,marker:green'
+  operation=(install --system flathub)
+fi
+
+# Keep the exact reference and metadata in the original fields. Only the fifth
+# field is displayed/searched: aligned names, subtle descriptions, and app IDs.
+# Metadata stays searchable without filling the list with app/arch/branch refs.
+LC_ALL=C sort -t $'\t' -f -k2,2 "$work_dir/rows" >"$work_dir/sorted"
+awk -F '\t' -v action="$mode" '
+  BEGIN { dim="\033[2m"; reset="\033[0m" }
+  {
+    split($1, ref, "/")
+    name=($2 == "" ? ref[2] : $2)
+    if (action == "install" && $4 != "") name=name "  ✓"
+    if (ref[4] != "stable") name=name " [" ref[4] "]"
+    printf "%s\t%s\t%s\t%s\t%-28s  %s%s  · %s%s\n", $1, $2, $3, $4, name, dim, $3, ref[2], reset
+  }
+' "$work_dir/sorted" >"$work_dir/display"
+script_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+printf -v preview '%q --preview %q {1} {2} {3} {4}' "$script_path" "$mode"
+header_args=()
+if [[ -n $catalog_notice ]]; then header_args=(--header="$catalog_notice"); fi
+
+pause_on_exit=0
+if FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' fzf \
+    --multi --ansi --delimiter=$'\t' --with-nth=5 --no-hscroll \
+    --prompt='> ' "${header_args[@]}" \
+    --preview "$preview" \
+    --preview-label='alt-p: toggle description, alt-j/k: scroll, tab: multi-select' \
+    --preview-label-pos=bottom --preview-window='down:65%:wrap' \
+    --bind='alt-p:toggle-preview,alt-j:preview-down,alt-k:preview-up,alt-d:preview-half-page-down,alt-u:preview-half-page-up' \
+    --color="$picker_color" \
+    <"$work_dir/display" >"$work_dir/selected"; then
+  :
+else
+  status=$?
+  if [[ $status == 1 || $status == 130 ]]; then exit 0; fi
+  pause_on_exit=1
+  printf 'The application picker failed (exit %s).\n' "$status" >&2
+  exit "$status"
+fi
+[[ -s $work_dir/selected ]] || exit 0
+pause_on_exit=1
+
+declare -A available=() seen=()
+while IFS=$'\t' read -r ref _; do available["$ref"]=1; done <"$work_dir/catalog"
+refs=()
+while IFS=$'\t' read -r ref _; do
+  if [[ ! $ref =~ ^app/[A-Za-z0-9._-]+/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$ || ! ${available[$ref]:-} ]]; then
+    printf 'Invalid selection; no applications were changed.\n' >&2
+    exit 1
+  fi
+  if [[ ! ${seen[$ref]:-} ]]; then refs+=("$ref"); seen["$ref"]=1; fi
+done <"$work_dir/selected"
+[[ ${#refs[@]} -gt 0 ]] || exit 0
+
+if flatpak "${operation[@]}" "${refs[@]}"; then
+  printf '\nFlatpak finished.\n'
+else
+  status=$?
+  printf '\nFlatpak did not complete successfully (exit %s). See the details above.\n' "$status" >&2
+  exit "$status"
+fi
