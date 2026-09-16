@@ -1,4 +1,5 @@
-# Flatpak Store
+# [Flatpak Store](https://plugins.omarchy.org/plugin.html?id=ipkalid.flatpak-store).
+
 
 An Omarchy shell plugin with three actions:
 
