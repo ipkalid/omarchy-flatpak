@@ -65,9 +65,17 @@ def edit_entry(raw, key, value=None):
 def entries_for(plugin_id):
     command = 'omarchy-shell shell summon ' + shlex.quote(plugin_id)
     entries = {}
-    for action in ('install', 'remove', 'update'):
-        payload = shlex.quote(json.dumps({'action': action}, separators=(',', ':')))
-        entries[action + '.flatpak'] = {'icon': '󰏖', 'label': 'Flatpak', 'action': command + ' ' + payload}
+    for provider, label in (('flatpak', 'Flatpak'), ('brew', 'Brew'), ('mise', 'mise')):
+        for action in ('install', 'remove', 'update'):
+            if provider == 'mise' and action == 'update':
+                continue
+            request = {'action': action}
+            # Preserve the exact existing Flatpak entries for compatibility.
+            if provider != 'flatpak':
+                request['provider'] = provider
+            payload = shlex.quote(json.dumps(request, separators=(',', ':')))
+            entries[action + '.' + provider] = {
+                'icon': '󰏖', 'label': label, 'action': command + ' ' + payload}
     return entries
 
 

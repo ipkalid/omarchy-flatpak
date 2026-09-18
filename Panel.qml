@@ -12,8 +12,10 @@ Ui.Panel {
   moduleName: manifest && manifest.id ? manifest.id : "ipkalid.flatpak-store"
   manageIpc: false
   property int selectedIndex: 0
+  property string provider: "flatpak"
+  readonly property var providers: ["flatpak", "brew", "mise"]
   readonly property var fonts: Style.font
-  readonly property string scriptPath: decodeURIComponent(Qt.resolvedUrl("flatpak-store").toString().replace(/^file:\/\//, ""))
+  readonly property string scriptPath: decodeURIComponent(Qt.resolvedUrl(provider + "-store").toString().replace(/^file:\/\//, ""))
   readonly property string menuPath: decodeURIComponent(Qt.resolvedUrl("menu.py").toString().replace(/^file:\/\//, ""))
   readonly property string probePath: decodeURIComponent(Qt.resolvedUrl("check-dependencies").toString().replace(/^file:\/\//, ""))
   property var dependencies: null
@@ -24,20 +26,30 @@ Ui.Panel {
   property string menuState: "unknown"
   property string menuError: ""
   property string probeError: ""
-  readonly property string guidance: [probeError, Actions.dependencyMessage(dependencies), menuError].filter(function(text) { return !!text }).join("\n\n")
+  readonly property string guidance: [probeError, Actions.dependencyMessage(dependencies, provider), menuError].filter(function(text) { return !!text }).join("\n\n")
   readonly property var actions: [
-    { action: "install", title: "Install", detail: "Find apps on Flathub", icon: "󰏖" },
-    { action: "remove", title: "Remove", detail: "Uninstall apps; keep saved data", icon: "󰭌" },
-    { action: "update", title: "Update All", detail: "Update system apps and runtimes", icon: "󰚰" },
+    { action: "install", title: "Install", detail: provider === "flatpak" ? "Find apps on Flathub" : provider === "brew" ? "Browse Homebrew formulae" : "Choose a tool and version", icon: "󰏖" },
+    { action: "remove", title: "Remove", detail: provider === "flatpak" ? "Uninstall apps; keep saved data" : provider === "brew" ? "Choose installed formulae" : "Choose installed tool versions", icon: "󰭌" },
+    { action: "update", title: "Update All", detail: provider === "brew" ? "Refresh Homebrew and upgrade formulae" : "Update system apps and runtimes", icon: "󰚰" },
     { action: "setup", title: settingUp ? "Adding menu shortcuts…" : menuBusy ? "Checking menu shortcuts…" : menuState === "complete" ? "Menu shortcuts added" : "Add menu shortcuts",
-      detail: "Omarchy → Install / Remove / Update → Flatpak", icon: menuState === "complete" ? "✓" : "󰐕" },
+      detail: "Add Flatpak, Brew, and mise menu entries", icon: menuState === "complete" ? "✓" : "󰐕" },
     { action: "check", title: checking ? "Checking requirements…" : "Check again", detail: "Refresh requirements and menu status", icon: "󰑐" }
-  ]
+  ].filter(function(item) { return root.provider !== "mise" || item.action !== "update" })
+
+  function switchProvider(direction) {
+    chooseProvider(providers[(providers.indexOf(provider) + direction + providers.length) % providers.length])
+  }
+
+  function chooseProvider(value) {
+    provider = value
+    selectedIndex = 0
+    refresh("")
+  }
 
   function enabledFor(action) {
     if (action === "check") return !checking && !menuBusy && !settingUp
     if (action === "setup") return !!dependencies && dependencies.python3 === true && !checking && !menuBusy && !settingUp && menuState !== "complete"
-    return !checking && Actions.canLaunch(action, dependencies)
+    return !checking && Actions.canLaunch(action, dependencies, provider)
   }
 
   function run(argv, callback) {
@@ -49,7 +61,9 @@ Ui.Panel {
   function open(payloadJson) {
     selectedIndex = 0
     controller.show()
-    refresh(Actions.actionFromPayload(payloadJson))
+    var request = Actions.requestFromPayload(payloadJson)
+    provider = request.provider
+    refresh(request.action)
   }
 
   // Includes shell hide, outside clicks, Escape, and popout switches.
@@ -68,13 +82,13 @@ Ui.Panel {
       root.checking = false
       try {
         var result = JSON.parse(output)
-        if (code !== 0 || typeof result.flatpak !== "boolean" || typeof result.fzf !== "boolean" || typeof result.python3 !== "boolean") throw new Error("probe failed")
+        if (code !== 0 || !Actions.validDependencies(result)) throw new Error("probe failed")
         root.dependencies = result
       } catch (_) {
         root.probeError = "Could not check requirements. Choose Check again."
       }
-      if (Actions.canLaunch(action, root.dependencies)) {
-        Quickshell.execDetached(Actions.commandFor(action, root.scriptPath))
+      if (Actions.canLaunch(action, root.dependencies, root.provider)) {
+        Quickshell.execDetached(Actions.commandFor(action, root.scriptPath, root.provider))
         root.close()
       } else if (root.dependencies && root.dependencies.python3 && !root.settingUp) {
         root.checkMenu(request)
@@ -138,7 +152,7 @@ Ui.Panel {
       id: keys
       anchors.fill: parent
       onCloseRequested: root.close()
-      onMoveRequested: function(dx, dy) { if (dy) root.moveSelection(dy) }
+      onMoveRequested: function(dx, dy) { if (dy) root.moveSelection(dy); else if (dx) root.switchProvider(dx) }
       onTabRequested: function(direction) { root.moveSelection(direction) }
       onActivateRequested: root.activate(root.actions[root.selectedIndex].action)
 
@@ -151,7 +165,7 @@ Ui.Panel {
           width: parent.width
           spacing: Style.space(4)
           Text {
-            text: "Flatpak Store"
+            text: "Package Store"
             textFormat: Text.PlainText
             color: Color.foreground
             font.family: root.fonts.family
@@ -165,6 +179,39 @@ Ui.Panel {
             opacity: 0.72
             font.family: root.fonts.family
             font.pixelSize: root.fonts.body
+          }
+        }
+
+        Row {
+          width: parent.width
+          spacing: Style.space(6)
+          Repeater {
+            model: root.providers
+            delegate: Ui.CursorSurface {
+              id: providerTab
+              required property string modelData
+              width: (content.width - Style.space(12)) / 3
+              height: Style.space(38)
+              current: root.provider === modelData
+              accent: Color.accent
+              Accessible.role: Accessible.Button
+              Accessible.name: tabLabel.text
+              Accessible.onPressAction: root.chooseProvider(providerTab.modelData)
+              Text {
+                id: tabLabel
+                anchors.centerIn: parent
+                text: providerTab.modelData === "flatpak" ? "Flatpak" : providerTab.modelData === "brew" ? "Brew" : "mise"
+                color: Color.foreground
+                font.family: root.fonts.family
+                font.pixelSize: root.fonts.body
+                font.bold: root.provider === providerTab.modelData
+              }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.chooseProvider(providerTab.modelData)
+              }
+            }
           }
         }
 
@@ -252,7 +299,7 @@ Ui.Panel {
         Ui.PanelSeparator { width: parent.width }
         Text {
           width: parent.width
-          text: "↑↓ / Tab to choose · Enter to open · Esc to close"
+          text: "←→ provider · ↑↓ / Tab action · Enter to open · Esc to close"
           textFormat: Text.PlainText
           wrapMode: Text.WordWrap
           color: Color.foreground

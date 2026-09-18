@@ -1,16 +1,30 @@
-# [Flatpak Store](https://plugins.omarchy.org/plugin.html?id=ipkalid.flatpak-store)
+# [Package Store](https://plugins.omarchy.org/plugin.html?id=ipkalid.flatpak-store)
 
 
-An Omarchy shell plugin with three actions:
+An Omarchy shell plugin with matching **Flatpak**, **Brew**, and **mise** views.
+Use the provider tabs (or Left/Right) to switch between them.
 
-- **Install** — browse Flathub with Omarchy-style terminal pickers.
-- **Remove** — select installed system apps; retain saved app data.
-- **Update All** — update all system Flatpak apps and runtimes in one operation.
+| Provider | Install | Remove | Update All |
+| --- | --- | --- | --- |
+| Flatpak | Browse system Flathub apps | Select system apps; keep saved data | Update system apps and runtimes |
+| Brew | Browse Homebrew formulae | Select installed formulae and confirm | Refresh metadata, then upgrade formulae |
+| mise | Choose a tool, then Latest or an exact version | Choose a tool, then installed versions and confirm | Not provided |
 
-Install and Update All automatically confirm Flatpak’s prompts and show progress.
-Remove shows Flatpak’s normal confirmation and progress.
+mise installation selects **Latest** at the bottom beside the prompt, with newer
+explicit versions nearest it above. Latest installs `tool@latest`, letting mise resolve the latest eligible
+release when the installation starts. Installation does **not** change global or
+project defaults. Removal leaves
+mise configuration untouched, including references to removed versions. Brew
+supports Linux formulae, including configured taps; casks and tap management are
+outside this version's scope. mise installation browses its bundled registry;
+custom backend entry is not provided.
 
-![Flatpak Store panel](preview.png)
+The plugin ID remains `ipkalid.flatpak-store` so existing installations and
+Flatpak shortcuts continue working.
+
+![Package Store launch artwork: Flatpak, Brew, and mise](marketing-square.png)
+
+*Marketing illustration; the actual panel uses your Omarchy theme.*
 
 ## Install the plugin
 
@@ -20,8 +34,9 @@ omarchy-shell shell summon ipkalid.flatpak-store '{}'
 ```
 
 Choose **Add menu shortcuts** in the centered panel to add **Omarchy → Install →
-Flatpak**, **Remove → Flatpak**, and **Update → Flatpak**. Once configured, the panel
-shows **Menu shortcuts added**. There is no top-level Flatpak Store menu entry.
+Flatpak / Brew / mise**, **Remove → Flatpak / Brew / mise**, and
+**Update → Flatpak / Brew**. Once configured, the panel
+shows **Menu shortcuts added**. There is no top-level Package Store menu entry.
 You can always summon the panel with the command above.
 
 Enabling or opening the plugin does not edit your menu or install dependencies.
@@ -31,54 +46,79 @@ runs its setup helper only when you choose **Add menu shortcuts**.
 ### Requirements
 
 Omarchy with the Quattro plugin system and `qs.Ui` panel components, Bash 4+,
-Python 3 for menu setup, `flatpak`, `fzf`, `xdg-terminal-exec`, and the standard
-Arch utilities `awk`, `sort`, `readlink`, `mktemp`, `mkfifo`, `setsid`, and GNU `timeout`.
+`xdg-terminal-exec`, and standard Arch utilities. Install and Remove need `fzf`.
+Each provider needs its own package manager on PATH; an unavailable provider
+does not disable the others. Brew and mise actions additionally require Python 3,
+as does menu setup. Catalog lookups use GNU `timeout`.
 
 ```sh
-omarchy pkg add flatpak fzf python
-# Only needed for installation if system Flathub is missing:
+omarchy pkg add flatpak fzf python mise
+# Only needed for Flatpak installation if system Flathub is missing:
 flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 ```
 
-The panel checks requirements on open and before launching an action. If Flatpak
-is missing, it shows `omarchy pkg add flatpak` and disables all package actions.
-Missing `fzf` disables Install and Remove, with `omarchy pkg add fzf` shown.
-Missing Python disables shortcut setup, with `omarchy pkg add python` shown.
-Run the suggested command in a terminal, then choose **Check again**.
-Direct action summons also show this guidance if requirements are missing.
-Closing the panel cancels any pending launch while a check is running.
+Install Homebrew using the instructions at [brew.sh](https://brew.sh) and ensure
+`brew` is on the Omarchy shell's PATH. The plugin never installs package managers
+automatically. If a requirement is missing, the panel shows guidance and disables
+the affected actions. Run the suggested command, then choose **Check again**.
+Direct action summons use the same checks. Closing the panel or switching
+providers cancels a pending launch while requirements are being checked.
 
-Update All needs only `flatpak` and Bash. Removing apps and browsing installed
-app details work offline without Flathub. Updates cover every system remote;
-user-only installations are outside this version’s scope.
+The same requirement checks run for Flatpak, Brew, and mise when opening a view,
+using a direct menu shortcut, or launching an action. Missing `fzf` or `timeout`
+disables Install and Remove; missing `xdg-terminal-exec` disables all package
+actions. Missing Python disables Brew/mise actions and menu setup, while Flatpak
+package actions remain usable. Each message explains how to install the missing
+requirement, and **Check again** re-enables actions once it is available.
+
+Flatpak Update All needs only Flatpak and Bash; Brew Update All needs Brew and
+Python. Removal reads local installed-package information and does not fetch an
+installation catalog. Flatpak updates cover every system remote; user-only
+Flatpak installations remain outside this version's scope.
 
 ## Controls and behavior
 
-In the panel, use the mouse, arrow keys, J/K, or Tab/Shift+Tab to choose an action.
+In the panel, use Left/Right (or H/L) to switch providers. Use the mouse,
+Up/Down, J/K, or Tab/Shift+Tab to choose an action.
 Enter or Space opens it; Escape or clicking outside closes the panel. Actions
 open detached terminals, so closing or disabling the panel does not interrupt an
 ongoing package transaction. No second Quickshell process is started.
 
 In the installation and removal pickers:
 
-- Type to search app names only; descriptions and IDs remain visible.
-- Tab selects multiple apps; Enter installs immediately or opens Flatpak’s removal confirmation.
+- Type to search names (or versions in the mise version picker); descriptions remain visible.
+- Tab selects multiple Flatpak apps, Brew formulae, or mise versions for removal.
+  mise installation selects one tool and one version at a time.
+- Enter installs the selection or opens removal confirmation.
 - Alt+P toggles details; Alt+J/K scroll; Alt+D/U scroll half a page.
 - Escape cancels without changing apps.
 
 The pickers follow Omarchy’s prompt, shortcut footer, and green/red markers.
-Names are aligned and sorted; descriptions are subdued. Installed apps have a ✓
-beside their names. Full references retain architecture and branch for operations.
+Names are aligned and sorted; descriptions are subdued. Installed entries have a ✓
+beside their names. mise version lists display backend ordering in reverse, newest first; the version
+picker keeps the same bottom prompt and selection layout as the other pickers.
+Removal lists only installed versions. Full Flatpak
+references retain architecture and branch for operations. Brew details are fetched
+for the highlighted formula; descriptions already available locally appear in rows.
 
 The picker opens immediately with fzf’s native spinner beside `0/0`, an empty
 app list, and the preview pane, just like the AUR picker. You can type a search
 or press Escape while the catalog loads. Escape also stops the pending lookup.
-Installation waits up to 45 seconds for the Flathub catalog, then tries a local
+Flatpak installation waits up to 45 seconds for the Flathub catalog, then tries a local
 cache with a visible stale-data notice. Previews time out after 15 seconds.
-Removal preserves saved app data and does not force removal or separately clean
-up unused runtimes. Install and Update All use `--assumeyes` to skip confirmation.
-Update All runs `flatpak update --system --assumeyes`. Errors and completed
+Flatpak removal preserves saved app data and does not force removal or separately
+clean up unused runtimes. Flatpak Install and Update All use `--assumeyes` to skip
+confirmation. Flatpak Update All runs `flatpak update --system --assumeyes`. Errors and completed
 operations remain visible until Enter is pressed.
+
+Brew and mise catalog queries time out after 45 seconds each; Brew previews time
+out after 15 seconds. Empty results and lookup failures are shown explicitly.
+Escape stops the pending lookup. Package transactions have no lookup timeout.
+Brew Update All runs `brew update` and, on success, `brew upgrade --formula`,
+respecting normal Homebrew pinning. Brew removal does not force dependency
+removal or add a separate cleanup command; Homebrew's normal behavior applies.
+mise commands run from your home directory so launching the panel from a project
+does not implicitly select that project's configuration.
 
 The plugin runs with your user permissions, as other Omarchy plugins do. Flatpak
 handles any required system authentication. The plugin does not run `sudo`,
@@ -86,7 +126,7 @@ download executables at startup, or run a background service.
 
 ## Menu setup, migration, and cleanup
 
-The panel's **Add menu shortcuts** button runs `menu.py setup`. It adds three direct
+The panel's **Add menu shortcuts** button runs `menu.py setup`. It adds eight direct
 shortcuts, preserves other entries and JSONC comments, and backs up changed files.
 It migrates exact entries from the older standalone installer and removes the
 old top-level Flatpak Store entry only if it still matches this plugin's generated
@@ -111,7 +151,7 @@ omarchy plugin remove ipkalid.flatpak-store
 
 Cleanup removes only entries that still exactly match this plugin’s generated
 entries. Your edited entries are retained and may need manual removal. Installed
-apps and saved data are retained. Disabling the plugin does not remove its menu
+packages, tool versions, and saved data are retained. Disabling the plugin does not remove its menu
 shortcuts; clean them up if you no longer want them displayed.
 
 The older `~/.local/bin/flatpak-store` remains available if you installed the
@@ -125,8 +165,8 @@ updates. The plugin always launches its own bundled script. The legacy
 omarchy plugin update ipkalid.flatpak-store
 ```
 
-This updates the plugin code. **Update All** in the panel updates Flatpak apps
-and runtimes instead.
+This updates the plugin code. **Update All** in the panel updates packages for
+the selected provider.
 
 ## CLI and shell interface
 
@@ -140,16 +180,31 @@ omarchy-shell shell summon ipkalid.flatpak-store '{"action":"update"}'
 omarchy-shell shell hide ipkalid.flatpak-store
 ```
 
+Use `provider` to target Brew or mise. Omitting it continues to target Flatpak.
+A provider-only payload opens that provider's view without launching an action.
+
+```sh
+omarchy-shell shell summon ipkalid.flatpak-store '{"provider":"brew","action":"install"}'
+omarchy-shell shell summon ipkalid.flatpak-store '{"provider":"brew","action":"update"}'
+omarchy-shell shell summon ipkalid.flatpak-store '{"provider":"mise","action":"install"}'
+omarchy-shell shell summon ipkalid.flatpak-store '{"provider":"mise","action":"remove"}'
+```
+
+The bundled `brew-store` and `mise-store` runners default to installation. Both
+accept `install` and `remove`; `brew-store` also accepts `update`. Each runner
+launches the shared `package_store.py` adapter from its plugin directory.
+
 Empty or invalid payloads open the panel without launching a package operation.
-Only the three documented action strings are accepted.
+Unknown providers/actions and the unsupported mise/update combination cannot
+launch a transaction.
 
 ## Verify
 
 ```sh
 omarchy plugin validate .
 python3 verify_qml.py
-bash -n flatpak-store check-dependencies
-shellcheck flatpak-store check-dependencies
+for script in flatpak-store check-dependencies brew-store mise-store; do bash -n "$script"; done
+shellcheck flatpak-store check-dependencies brew-store mise-store
 python3 -m unittest discover -s tests -v
 ```
 
@@ -159,4 +214,6 @@ The QML check uses your installed Omarchy shell imports and Qt’s `qmllint`.
 
 References: [Omarchy development guide](https://plugins.omarchy.org/develop.html),
 [publishing guide](https://plugins.omarchy.org/publish.html),
-[Flatpak command reference](https://docs.flatpak.org/en/latest/flatpak-command-reference.html).
+[Flatpak command reference](https://docs.flatpak.org/en/latest/flatpak-command-reference.html),
+[Homebrew command reference](https://docs.brew.sh/Manpage),
+[mise command reference](https://mise.jdx.dev/cli/).

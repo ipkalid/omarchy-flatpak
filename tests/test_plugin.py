@@ -29,6 +29,18 @@ class MenuTests(unittest.TestCase):
         self.assertIn('// keep this comment', result)
         self.assertEqual(menu.configure(result, PLUGIN_ID, home), result)
 
+    def test_existing_flatpak_shortcuts_are_retained_and_new_providers_added(self):
+        command = 'omarchy-shell shell summon ' + PLUGIN_ID
+        original = {action + '.flatpak': {'icon': '󰏖', 'label': 'Flatpak',
+                    'action': command + " '{\"action\":\"" + action + "\"}'"}
+                    for action in ('install', 'remove', 'update')}
+        configured = menu.parse_jsonc(menu.configure(json.dumps(original), PLUGIN_ID, Path('/tmp')))[0]
+        self.assertEqual({key: configured[key] for key in original}, original)
+        self.assertEqual(len(configured), 8)
+        self.assertNotIn('update.mise', configured)
+        for provider in ('brew', 'mise'):
+            self.assertIn('"provider":"' + provider + '"', configured['install.' + provider]['action'])
+
     def test_cleanup_entry_positions_and_trailing_commas(self):
         for raw in ('{}', '{ /* empty */ }', '{"custom": 1,}',
                     '{"custom": {"label": "https://example.com/*ok*/",}, // comment\n}',
@@ -55,7 +67,8 @@ class MenuTests(unittest.TestCase):
 
     def test_setup_conflicts_and_duplicate_keys(self):
         for raw in ('{"update.flatpak":{"action":"mine"}}',
-                    '{"install.flatpak":null}', '{"x":1,"x":2}'):
+                    '{"install.flatpak":null}', '{"x":1,"x":2}',
+                    '{"install.brew":{"action":"mine"}}', '{"remove.mise":{"action":"mine"}}'):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 menu.configure(raw, PLUGIN_ID, Path('/tmp'))
 
@@ -85,7 +98,7 @@ class MenuTests(unittest.TestCase):
                 return result.returncode, json.loads(result.stdout)
             code, result = invoke('status')
             self.assertEqual(code, 0)
-            self.assertEqual(set(result['missing']), {'install.flatpak', 'remove.flatpak', 'update.flatpak'})
+            self.assertEqual(set(result['missing']), set(menu.entries_for(PLUGIN_ID)))
             self.assertEqual(list(home.iterdir()), [])
             self.assertTrue(invoke('setup')[1]['changed'])
             self.assertEqual(invoke('status')[1]['status'], 'complete')
@@ -126,8 +139,13 @@ class MenuTests(unittest.TestCase):
 
 class PluginTests(unittest.TestCase):
     def test_dependency_probe_without_python_or_flatpak(self):
+        dependencies = ('flatpak', 'brew', 'mise', 'fzf', 'python3', 'timeout', 'xdg-terminal-exec')
+        cases = [(), dependencies, *(tuple(name for name in dependencies if name != missing)
+                                     for missing in dependencies)]
         with tempfile.TemporaryDirectory() as temporary:
-            for available in ([], ['flatpak'], ['flatpak', 'fzf', 'python3']):
+            for available in cases:
+                for stub in Path(temporary).iterdir():
+                    stub.unlink()
                 for command in available:
                     stub = Path(temporary) / command
                     stub.write_text('#!/bin/bash\nexit 99\n')
@@ -135,7 +153,7 @@ class PluginTests(unittest.TestCase):
                 result = subprocess.run(['/bin/bash', str(ROOT / 'check-dependencies')],
                                         env={**os.environ, 'PATH': temporary}, check=True,
                                         capture_output=True, text=True)
-                self.assertEqual(json.loads(result.stdout), {name: name in available for name in ('flatpak', 'fzf', 'python3')})
+                self.assertEqual(json.loads(result.stdout), {name: name in available for name in dependencies})
 
     def test_action_payloads_and_argv(self):
         subprocess.run(['node', str(ROOT / 'tests/actions.test.js')], check=True, capture_output=True)

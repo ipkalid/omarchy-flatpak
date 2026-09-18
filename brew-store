@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'Python is required. Install in a terminal: omarchy pkg add python\n' >&2
+  if [[ -t 0 ]]; then read -r -p 'Press Enter to close… ' _ || true; fi
+  exit 1
+fi
+exec python3 -B "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/package_store.py" brew "$@"
