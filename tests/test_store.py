@@ -1,3 +1,4 @@
+import errno
 import importlib.util
 import json
 import os
@@ -17,7 +18,7 @@ REF_B = 'app/org.example.Two/x86_64/beta'
 CATALOG = f'{REF_A}\tApp One\tFirst application\n{REF_B}\tApp Two\tSecond application\n'
 
 STUB = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 with open(os.environ['CALLS'], 'a') as out:
@@ -37,6 +38,7 @@ if name == 'fzf':
 elif args[0] == 'remotes':
     print('other' if os.environ.get('NO_REMOTE') else 'flathub')
 elif args[0] == 'remote-ls':
+    time.sleep(float(os.environ.get('LOAD_DELAY', '0')))
     if os.environ.get('OFFLINE') and '--cached' not in args:
         print('Network unavailable', file=sys.stderr); sys.exit(1)
     if os.environ.get('NO_CACHE') and '--cached' in args: sys.exit(1)
@@ -61,7 +63,7 @@ elif args[0] in ('info', 'remote-info'):
 
 
 class PickerTests(unittest.TestCase):
-    def run_picker(self, mode=None, **overrides):
+    def run_picker(self, mode=None, terminal=False, **overrides):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             commands = base / 'bin'
@@ -76,12 +78,59 @@ class PickerTests(unittest.TestCase):
             command = ['bash', str(ROOT / 'flatpak-store')]
             if isinstance(mode, list): command.extend(mode)
             elif mode: command.append(mode)
-            result = subprocess.run(command, env=env,
-                                    capture_output=True, text=True, timeout=10)
+            if terminal:
+                master, slave = os.openpty()
+                try:
+                    result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.PIPE, stderr=slave,
+                                            text=True, timeout=10)
+                    os.close(slave)
+                    slave = None
+                    chunks = []
+                    while True:
+                        try:
+                            chunk = os.read(master, 4096)
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                raise
+                            break
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    result.stderr = b''.join(chunks).decode()
+                finally:
+                    os.close(master)
+                    if slave is not None:
+                        os.close(slave)
+            else:
+                result = subprocess.run(command, env=env,
+                                        capture_output=True, text=True, timeout=10)
             calls = [json.loads(line) for line in (base / 'calls').read_text().splitlines()] if (base / 'calls').exists() else []
             rows = (base / 'rows').read_text() if (base / 'rows').exists() else ''
             self.assertEqual(list(base.glob('flatpak-store.*')), [], 'Temporary data leaked')
             return result, calls, rows
+
+    def test_loading_spinner_in_terminal_and_cache_fallback(self):
+        for extra in ({}, {'OFFLINE': '1'}, {'OFFLINE': '1', 'NO_CACHE': '1'}):
+            with self.subTest(extra=extra):
+                result, calls, _ = self.run_picker(
+                    terminal=True, TERM='xterm-256color', LOAD_DELAY='0.25', PICK='cancel', **extra)
+                self.assertEqual(result.returncode, 1 if extra.get('NO_CACHE') else 0)
+                self.assertIn('⠋ Loading Flathub applications…', result.stderr)
+                self.assertIn('⠙ Loading Flathub applications…', result.stderr)
+                self.assertIn('\r\x1b[K', result.stderr)
+                if extra.get('OFFLINE'):
+                    self.assertIn('\r\x1b[KNetwork unavailable', result.stderr)
+                    self.assertIn('Loading cached Flathub applications…', result.stderr)
+                if extra.get('NO_CACHE'):
+                    self.assertFalse(any(c[0] == 'fzf' for c in calls))
+
+    def test_loading_without_terminal_uses_plain_messages(self):
+        result, _, _ = self.run_picker(PICK='cancel')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Loading Flathub applications…\n', result.stderr)
+        self.assertNotIn('\x1b', result.stderr)
+        self.assertNotIn('⠋', result.stderr)
 
     def test_exact_refs_and_installed_marker(self):
         result, calls, rows = self.run_picker()

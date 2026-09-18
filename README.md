@@ -70,6 +70,8 @@ The pickers follow Omarchy’s prompt, shortcut footer, and green/red markers.
 Names are aligned and sorted; descriptions are subdued. Installed apps have a ✓
 beside their names. Full references retain architecture and branch for operations.
 
+An animated spinner appears while loading the app lists, including the local
+cache fallback. Redirected output uses plain loading messages.
 Installation waits up to 45 seconds for the Flathub catalog, then tries a local
 cache with a visible stale-data notice. Previews time out after 15 seconds.
 Removal preserves saved app data and does not force removal or separately clean

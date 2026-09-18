@@ -47,9 +47,44 @@ if [[ ${1:-} == --preview ]]; then
   exit
 fi
 
+stop_loading() {
+  if [[ -n ${spinner_pid:-} ]]; then
+    kill "$spinner_pid" 2>/dev/null || true
+    wait "$spinner_pid" 2>/dev/null || true
+    spinner_pid=''
+    printf '\r\033[K' >&2
+  fi
+}
+
+run_loading() {
+  local title=$1 status=0
+  shift
+  if [[ -t 2 && ${TERM:-dumb} != dumb ]]; then
+    (
+      trap 'exit 0' INT TERM
+      frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+      while :; do
+        for frame in "${frames[@]}"; do
+          printf '\r\033[K%s %s' "$frame" "$title" >&2
+          sleep 0.08
+        done
+      done
+    ) &
+    spinner_pid=$!
+  else
+    printf '%s\n' "$title" >&2
+  fi
+  # Keep diagnostics clear of the animation and preserve the command's status.
+  "$@" 2>"$work_dir/loading-error" || status=$?
+  stop_loading
+  cat "$work_dir/loading-error" >&2
+  return "$status"
+}
+
 finish() {
   local status=$?
   trap - EXIT
+  stop_loading
   [[ -z ${work_dir:-} ]] || rm -rf -- "$work_dir"
   if [[ -t 0 && -t 1 && ${pause_on_exit:-0} == 1 ]]; then
     read -r -p $'\nPress Enter to close… ' _ || true
@@ -106,7 +141,7 @@ done
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/flatpak-store.XXXXXXXX")
 load_install_catalog() {
-  if ! flatpak remotes --system --columns=name >"$work_dir/remotes"; then
+  if ! run_loading 'Checking Flathub…' flatpak remotes --system --columns=name >"$work_dir/remotes"; then
     printf 'Could not read system Flatpak remotes.\n' >&2
     exit 1
   fi
@@ -116,14 +151,13 @@ load_install_catalog() {
     exit 1
   fi
 
-  printf 'Loading Flathub applications…\n'
   catalog_options=(--system --app '--columns=ref,name,description')
   catalog_notice=''
-  if ! timeout 45s flatpak remote-ls "${catalog_options[@]}" flathub \
-      >"$work_dir/catalog" 2>"$work_dir/error"; then
-    cat "$work_dir/error" >&2
+  if ! run_loading 'Loading Flathub applications…' timeout 45s flatpak remote-ls \
+      "${catalog_options[@]}" flathub >"$work_dir/catalog"; then
     printf 'Could not refresh Flathub. Trying the local cache…\n' >&2
-    if ! timeout 15s flatpak remote-ls "${catalog_options[@]}" --cached flathub >"$work_dir/catalog"; then
+    if ! run_loading 'Loading cached Flathub applications…' timeout 15s flatpak remote-ls \
+        "${catalog_options[@]}" --cached flathub >"$work_dir/catalog"; then
       printf 'No catalog available. Check your connection and try again.\n' >&2
       exit 1
     fi
@@ -133,7 +167,7 @@ load_install_catalog() {
     printf 'Flathub returned no applications. Check the remote and try again.\n' >&2
     exit 1
   fi
-  if ! flatpak list --system --app --columns=ref >"$work_dir/installed"; then
+  if ! run_loading 'Checking installed applications…' flatpak list --system --app --columns=ref >"$work_dir/installed"; then
     printf 'Could not determine installed apps. Try again after resolving the Flatpak error.\n' >&2
     exit 1
   fi
@@ -148,8 +182,8 @@ load_install_catalog() {
 }
 
 if [[ $mode == remove ]]; then
-  printf 'Loading installed system applications…\n'
-  if ! flatpak list --system --app --columns=ref,name,description >"$work_dir/installed"; then
+  if ! run_loading 'Loading installed system applications…' flatpak list \
+      --system --app --columns=ref,name,description >"$work_dir/installed"; then
     printf 'Could not list installed apps. Resolve the Flatpak error and try again.\n' >&2
     exit 1
   fi
