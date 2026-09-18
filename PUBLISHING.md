@@ -22,7 +22,7 @@ requires the public repository URL. Use category **System** and tags **System**,
 Suggested listing summary:
 
 > Install, remove, and update system Flatpak apps from a native Omarchy panel,
-> with familiar terminal pickers and normal Flatpak confirmation.
+> with familiar terminal pickers, automatic install/update confirmation, and a loading spinner.
 
 Marketplace validation and maintainer approval are separate from publishing the
 repository. See the [publishing guide](https://plugins.omarchy.org/publish.html).
