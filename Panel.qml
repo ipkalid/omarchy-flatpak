@@ -77,7 +77,7 @@ Ui.Panel {
     probeError = ""
     menuError = ""
     menuState = "unknown"
-    run(["bash", probePath], function(code, output) {
+    run(["bash", probePath, provider], function(code, output) {
       if (!Actions.isCurrent(request, root.generation, root.opened)) return
       root.checking = false
       try {

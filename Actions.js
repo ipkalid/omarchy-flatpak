@@ -53,7 +53,7 @@ function dependencyMessage(dependencies, provider) {
   provider = provider === undefined ? "flatpak" : provider;
   var messages = [];
   if (!dependencies[provider]) {
-    if (provider === "brew") messages.push("Homebrew is not available on PATH.\nInstall Homebrew using https://brew.sh, then check again.");
+    if (provider === "brew") messages.push("Homebrew was not found on PATH or in the usual Linux install locations.\nFor a custom install, expose brew on the desktop PATH or set HOMEBREW_PREFIX. Otherwise install it using https://brew.sh, then check again.");
     else messages.push((provider === "mise" ? "mise" : "Flatpak") + " is not installed.\nInstall in a terminal: omarchy pkg add " + provider);
   }
   if (!dependencies.fzf) messages.push("fzf is required for Install and Remove.\nInstall in a terminal: omarchy pkg add fzf");

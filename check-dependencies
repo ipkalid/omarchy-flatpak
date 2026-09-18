@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Read-only probe; works without Python or Flatpak installed.
 set -eu
+if [[ ${1:-flatpak} == brew ]]; then
+  script_dir=.
+  [[ ${BASH_SOURCE[0]} != */* ]] || script_dir=${BASH_SOURCE[0]%/*}
+  # shellcheck source=brew-path.sh
+  source "$script_dir/brew-path.sh"
+  configure_brew_path
+fi
 printf '{'
 separator=''
 for dependency in flatpak brew mise fzf python3 timeout xdg-terminal-exec; do

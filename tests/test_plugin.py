@@ -155,6 +155,24 @@ class PluginTests(unittest.TestCase):
                                         capture_output=True, text=True)
                 self.assertEqual(json.loads(result.stdout), {name: name in available for name in dependencies})
 
+    def test_brew_probe_finds_custom_prefix_without_executing_brew(self):
+        with tempfile.TemporaryDirectory(prefix='brew prefix ') as temporary:
+            prefix = Path(temporary)
+            (prefix / 'bin').mkdir()
+            brew = prefix / 'bin/brew'
+            brew.write_text('#!/bin/bash\nprintf ran > "' + str(prefix / 'executed') + '"\n')
+            brew.chmod(0o755)
+            result = subprocess.run(['/bin/bash', str(ROOT / 'check-dependencies'), 'brew'],
+                                    env={**os.environ, 'PATH': '/usr/bin:/bin', 'HOMEBREW_PREFIX': temporary},
+                                    capture_output=True, text=True, check=True)
+            self.assertTrue(json.loads(result.stdout)['brew'])
+            self.assertFalse((prefix / 'executed').exists())
+            # Other providers retain their inherited environment.
+            result = subprocess.run(['/bin/bash', str(ROOT / 'check-dependencies'), 'mise'],
+                                    env={**os.environ, 'PATH': temporary, 'HOMEBREW_PREFIX': temporary},
+                                    capture_output=True, text=True, check=True)
+            self.assertFalse(json.loads(result.stdout)['brew'])
+
     def test_action_payloads_and_argv(self):
         subprocess.run(['node', str(ROOT / 'tests/actions.test.js')], check=True, capture_output=True)
 

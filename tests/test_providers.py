@@ -97,6 +97,25 @@ class ProviderTests(unittest.TestCase):
         return [[name, *args] for name, args, cwd in calls
                 if name in ('brew', 'mise') and args[0] in ('install', 'uninstall', 'update', 'upgrade', 'use', 'unuse')]
 
+    def test_brew_launcher_finds_prefix_outside_desktop_path(self):
+        prefix = self.home / 'custom brew'
+        (prefix / 'bin').mkdir(parents=True)
+        (self.bin / 'brew').rename(prefix / 'bin/brew')
+        result, calls = self.run_store(action='update', HOMEBREW_PREFIX=str(prefix),
+                                       PATH=str(self.bin) + ':/usr/bin:/bin')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade', '--formula']])
+
+    def test_brew_on_path_takes_precedence_over_prefix(self):
+        prefix = self.home / 'other brew'
+        (prefix / 'bin').mkdir(parents=True)
+        brew = prefix / 'bin/brew'
+        brew.write_text('#!/bin/bash\nexit 91\n')
+        brew.chmod(0o755)
+        result, calls = self.run_store(action='update', HOMEBREW_PREFIX=str(prefix))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade', '--formula']])
+
     def test_brew_install_exact_formulae(self):
         result, calls = self.run_store(choices=('0,1,1,2',))
         self.assertEqual(result.returncode, 0, result.stderr)

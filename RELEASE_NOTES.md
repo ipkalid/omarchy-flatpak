@@ -1,35 +1,21 @@
-# Package Store v1.2.0
+# Package Store v1.2.1
 
-Flatpak Store now includes matching Flatpak, Brew, and mise views in one native
-Omarchy panel. The plugin ID remains `ipkalid.flatpak-store`, preserving existing
-installations and Flatpak shortcuts.
+Fix Brew being reported as missing when Omarchy's desktop PATH does not include
+an existing Homebrew installation.
 
-- Browse, install, and remove Homebrew formulae. Update All refreshes Homebrew and upgrades formulae.
-- Install mise tools by selecting an explicit version or Latest. Select installed versions for removal.
-- Keep the familiar bottom-prompt picker layout, with Latest selected beside the prompt and newer versions nearest it.
-- Check each provider's dependencies, show installation guidance, and disable only affected actions. Check again refreshes availability.
-- Add direct Brew and mise menu shortcuts through the existing explicit menu setup action.
-- Keep mise global and project defaults unchanged. Confirm selected formulae or tool versions before removal.
-- Cancel pending catalog lookups immediately; keep transaction errors visible.
+- Use the same Brew discovery in the dependency probe and terminal launcher.
+- Respect Brew already on PATH; otherwise check `HOMEBREW_PREFIX`,
+  `/home/linuxbrew/.linuxbrew`, and `~/.linuxbrew`.
+- Keep environment changes local to the Brew action. Shell configuration and
+  the other providers are unchanged.
+- Improve guidance for custom Homebrew installations.
 
-The square marketing artwork is included as `marketing-square.png`. It is a
-conceptual illustration, not a screenshot.
+Update with `omarchy plugin update ipkalid.flatpak-store`, reopen Package Store,
+and choose **Check again** in the Brew view. No Homebrew reinstall is needed.
 
-## Update
+Validated with 65 tests, QML and plugin validation, Bash syntax, and ShellCheck.
+The dependency probe was also checked with only `/usr/bin:/bin` on PATH and
+correctly detected the installed Linuxbrew prefix.
 
-```sh
-omarchy plugin update ipkalid.flatpak-store
-omarchy-shell shell summon ipkalid.flatpak-store '{}'
-```
-
-Choose **Add menu shortcuts** again to add the new providers. Package managers
-are not installed automatically. Brew supports Linux formulae; mise has Install
-and Remove actions, with no Update action in this release.
-
-## Validation
-
-The automated suite covers all three providers using stub package commands,
-including dependency failures, cancellation, exact version selection, and menu
-migration. QML and plugin validation also pass. Package transactions were not
-run against the host installation; a full live desktop-panel check remains
-outside the sandbox's available display environment.
+See [v1.2.0](https://github.com/ipkalid/omarchy-flatpak/releases/tag/v1.2.0)
+for the original Brew/mise feature release and square marketing artwork.

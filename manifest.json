@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ipkalid.flatpak-store",
   "name": "Package Store",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "Khalid Alhazmi",
   "license": "MIT",
   "description": "Manage Flatpak apps, Homebrew formulae, and mise tool versions with familiar Omarchy terminal pickers.",

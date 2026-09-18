@@ -47,7 +47,7 @@ runs its setup helper only when you choose **Add menu shortcuts**.
 
 Omarchy with the Quattro plugin system and `qs.Ui` panel components, Bash 4+,
 `xdg-terminal-exec`, and standard Arch utilities. Install and Remove need `fzf`.
-Each provider needs its own package manager on PATH; an unavailable provider
+Each provider needs its own package manager; an unavailable provider
 does not disable the others. Brew and mise actions additionally require Python 3,
 as does menu setup. Catalog lookups use GNU `timeout`.
 
@@ -57,8 +57,11 @@ omarchy pkg add flatpak fzf python mise
 flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 ```
 
-Install Homebrew using the instructions at [brew.sh](https://brew.sh) and ensure
-`brew` is on the Omarchy shell's PATH. The plugin never installs package managers
+The Brew view respects `brew` already on PATH, then checks `HOMEBREW_PREFIX`,
+`/home/linuxbrew/.linuxbrew`, and `~/.linuxbrew`. Its dependency probe and launcher
+use the same detected prefix, even when the desktop PATH differs from a terminal.
+For other custom locations, expose `brew` on the desktop PATH or set
+`HOMEBREW_PREFIX`. If Brew is not installed, follow [brew.sh](https://brew.sh). The plugin never installs package managers
 automatically. If a requirement is missing, the panel shows guidance and disables
 the affected actions. Run the suggested command, then choose **Check again**.
 Direct action summons use the same checks. Closing the panel or switching
@@ -203,8 +206,8 @@ launch a transaction.
 ```sh
 omarchy plugin validate .
 python3 verify_qml.py
-for script in flatpak-store check-dependencies brew-store mise-store; do bash -n "$script"; done
-shellcheck flatpak-store check-dependencies brew-store mise-store
+for script in flatpak-store check-dependencies brew-store mise-store brew-path.sh; do bash -n "$script"; done
+shellcheck flatpak-store check-dependencies brew-store mise-store brew-path.sh
 python3 -m unittest discover -s tests -v
 ```
 
