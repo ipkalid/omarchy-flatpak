@@ -32,7 +32,7 @@ runs its setup helper only when you choose **Add menu shortcuts**.
 
 Omarchy with the Quattro plugin system and `qs.Ui` panel components, Bash 4+,
 Python 3 for menu setup, `flatpak`, `fzf`, `xdg-terminal-exec`, and the standard
-Arch utilities `awk`, `sort`, `readlink`, `mktemp`, and GNU `timeout`.
+Arch utilities `awk`, `sort`, `readlink`, `mktemp`, `mkfifo`, `setsid`, and GNU `timeout`.
 
 ```sh
 omarchy pkg add flatpak fzf python
@@ -70,8 +70,9 @@ The pickers follow Omarchy’s prompt, shortcut footer, and green/red markers.
 Names are aligned and sorted; descriptions are subdued. Installed apps have a ✓
 beside their names. Full references retain architecture and branch for operations.
 
-An animated spinner appears while loading the app lists, including the local
-cache fallback. Redirected output uses plain loading messages.
+The picker opens immediately with fzf’s native spinner beside `0/0`, an empty
+app list, and the preview pane, just like the AUR picker. You can type a search
+or press Escape while the catalog loads. Escape also stops the pending lookup.
 Installation waits up to 45 seconds for the Flathub catalog, then tries a local
 cache with a visible stale-data notice. Previews time out after 15 seconds.
 Removal preserves saved app data and does not force removal or separately clean

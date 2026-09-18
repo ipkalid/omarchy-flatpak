@@ -47,44 +47,107 @@ if [[ ${1:-} == --preview ]]; then
   exit
 fi
 
-stop_loading() {
-  if [[ -n ${spinner_pid:-} ]]; then
-    kill "$spinner_pid" 2>/dev/null || true
-    wait "$spinner_pid" 2>/dev/null || true
-    spinner_pid=''
-    printf '\r\033[K' >&2
+load_install_catalog() {
+  if ! flatpak remotes --system --columns=name >"$work_dir/remotes"; then
+    printf 'Could not read system Flatpak remotes.\n' >&2
+    exit 1
   fi
+  if ! awk '$0 == "flathub" { found=1 } END { exit !found }' "$work_dir/remotes"; then
+    printf '%s\n' 'System Flathub is not configured. Add it with:' \
+      'flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo' >&2
+    exit 1
+  fi
+
+  catalog_options=(--system --app '--columns=ref,name,description')
+  catalog_notice=''
+  if ! timeout --foreground 45s flatpak remote-ls \
+      "${catalog_options[@]}" flathub >"$work_dir/catalog"; then
+    printf 'Could not refresh Flathub. Trying the local cache…\n' >&2
+    if ! timeout --foreground 15s flatpak remote-ls \
+        "${catalog_options[@]}" --cached flathub >"$work_dir/catalog"; then
+      printf 'No catalog available. Check your connection and try again.\n' >&2
+      exit 1
+    fi
+    catalog_notice='OFFLINE / STALE CACHE · Flathub · installation needs a connection'
+  fi
+  if [[ ! -s $work_dir/catalog ]]; then
+    printf 'Flathub returned no applications. Check the remote and try again.\n' >&2
+    exit 1
+  fi
+  if ! flatpak list --system --app --columns=ref >"$work_dir/installed"; then
+    printf 'Could not determine installed apps. Try again after resolving the Flatpak error.\n' >&2
+    exit 1
+  fi
+
+  # flatpak list omits the app/ prefix that remote-ls includes.
+  awk -F '\t' 'FILENAME == ARGV[1] {
+    ref=$1; sub(/^app\//, "", ref); installed[ref]=1; next
+  } {
+    ref=$1; sub(/^app\//, "", ref)
+    printf "%s\t%s\t%s\t%s\n", $1, $2, $3, (ref in installed ? "[installed]" : "")
+  }' "$work_dir/installed" "$work_dir/catalog" >"$work_dir/rows"
 }
 
-run_loading() {
-  local title=$1 status=0
-  shift
-  if [[ -t 2 && ${TERM:-dumb} != dumb ]]; then
-    (
-      trap 'exit 0' INT TERM
-      frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-      while :; do
-        for frame in "${frames[@]}"; do
-          printf '\r\033[K%s %s' "$frame" "$title" >&2
-          sleep 0.08
-        done
-      done
-    ) &
-    spinner_pid=$!
+load_catalog() {
+  if [[ $mode == remove ]]; then
+    if ! flatpak list \
+        --system --app --columns=ref,name,description >"$work_dir/installed"; then
+      printf 'Could not list installed apps. Resolve the Flatpak error and try again.\n' >&2
+      exit 1
+    fi
+    if [[ ! -s $work_dir/installed ]]; then
+      printf 'No system Flatpak applications are installed.\n' >&2
+      exit 0
+    fi
+    # Normalize list output to the full app refs used for validation and removal.
+    awk '{ if ($0 !~ /^app\//) printf "app/"; print }' "$work_dir/installed" >"$work_dir/catalog"
+    cp "$work_dir/catalog" "$work_dir/rows"
+    catalog_notice=''
   else
-    printf '%s\n' "$title" >&2
+    load_install_catalog
   fi
-  # Keep diagnostics clear of the animation and preserve the command's status.
-  "$@" 2>"$work_dir/loading-error" || status=$?
-  stop_loading
-  cat "$work_dir/loading-error" >&2
-  return "$status"
+
+  # Keep the exact reference and metadata in the original fields. Display names
+  # and descriptions/IDs in separate fields so only names are searched.
+  LC_ALL=C sort -t $'\t' -f -k2,2 "$work_dir/rows" >"$work_dir/sorted"
+  awk -F '\t' -v action="$mode" '
+    BEGIN { dim="\033[2m"; reset="\033[0m" }
+    {
+      split($1, ref, "/")
+      name=($2 == "" ? ref[2] : $2)
+      if (action == "install" && $4 != "") name=name "  ✓"
+      if (ref[4] != "stable") name=name " [" ref[4] "]"
+      printf "%s\t%s\t%s\t%s\t%-28s\t%s%s  · %s%s\n", $1, $2, $3, $4, name, dim, $3, ref[2], reset
+    }
+  ' "$work_dir/sorted" >"$work_dir/display"
+  # The load event runs after EOF, so this action is ready before fzf uses it.
+  printf 'change-header(%s)\n' "$catalog_notice" >"$work_dir/loaded-action"
+  cat "$work_dir/display"
+}
+
+# Internal read-only worker, isolated so Escape can stop the entire lookup.
+if [[ ${1:-} == --load-catalog ]]; then
+  [[ $# == 3 && ( $2 == install || $2 == remove ) && -d $3 ]] || exit 2
+  mode=$2
+  work_dir=$3
+  trap 'status=$?; printf "%s\n" "$status" >"$work_dir/load-status"' EXIT
+  load_catalog
+  exit
+fi
+
+stop_loader() {
+  if [[ -n ${loader_pid:-} ]]; then
+    kill -- "-$loader_pid" 2>/dev/null || true
+    kill "$loader_pid" 2>/dev/null || true
+    wait "$loader_pid" 2>/dev/null || true
+    loader_pid=''
+  fi
 }
 
 finish() {
   local status=$?
   trap - EXIT
-  stop_loading
+  stop_loader
   [[ -z ${work_dir:-} ]] || rm -rf -- "$work_dir"
   if [[ -t 0 && -t 1 && ${pause_on_exit:-0} == 1 ]]; then
     read -r -p $'\nPress Enter to close… ' _ || true
@@ -132,7 +195,7 @@ if [[ $mode == update ]]; then
   exit 0
 fi
 
-for dependency in flatpak fzf timeout awk mktemp; do
+for dependency in flatpak fzf timeout awk mktemp mkfifo setsid; do
   if ! command -v "$dependency" >/dev/null 2>&1; then
     printf 'Missing dependency: %s\nInstall flatpak and fzf with: omarchy pkg add flatpak fzf\n' "$dependency" >&2
     exit 1
@@ -140,104 +203,66 @@ for dependency in flatpak fzf timeout awk mktemp; do
 done
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/flatpak-store.XXXXXXXX")
-load_install_catalog() {
-  if ! run_loading 'Checking Flathub…' flatpak remotes --system --columns=name >"$work_dir/remotes"; then
-    printf 'Could not read system Flatpak remotes.\n' >&2
-    exit 1
-  fi
-  if ! awk '$0 == "flathub" { found=1 } END { exit !found }' "$work_dir/remotes"; then
-    printf '%s\n' 'System Flathub is not configured. Add it with:' \
-      'flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo' >&2
-    exit 1
-  fi
-
-  catalog_options=(--system --app '--columns=ref,name,description')
-  catalog_notice=''
-  if ! run_loading 'Loading Flathub applications…' timeout 45s flatpak remote-ls \
-      "${catalog_options[@]}" flathub >"$work_dir/catalog"; then
-    printf 'Could not refresh Flathub. Trying the local cache…\n' >&2
-    if ! run_loading 'Loading cached Flathub applications…' timeout 15s flatpak remote-ls \
-        "${catalog_options[@]}" --cached flathub >"$work_dir/catalog"; then
-      printf 'No catalog available. Check your connection and try again.\n' >&2
-      exit 1
-    fi
-    catalog_notice='OFFLINE / STALE CACHE · Flathub · installation needs a connection'
-  fi
-  if [[ ! -s $work_dir/catalog ]]; then
-    printf 'Flathub returned no applications. Check the remote and try again.\n' >&2
-    exit 1
-  fi
-  if ! run_loading 'Checking installed applications…' flatpak list --system --app --columns=ref >"$work_dir/installed"; then
-    printf 'Could not determine installed apps. Try again after resolving the Flatpak error.\n' >&2
-    exit 1
-  fi
-
-  # flatpak list omits the app/ prefix that remote-ls includes.
-  awk -F '\t' 'FILENAME == ARGV[1] {
-    ref=$1; sub(/^app\//, "", ref); installed[ref]=1; next
-  } {
-    ref=$1; sub(/^app\//, "", ref)
-    printf "%s\t%s\t%s\t%s\n", $1, $2, $3, (ref in installed ? "[installed]" : "")
-  }' "$work_dir/installed" "$work_dir/catalog" >"$work_dir/rows"
-}
-
+script_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+printf -v preview '%q --preview %q {1} {2} {3} {4}' "$script_path" "$mode"
+printf -v loaded_action 'cat %q' "$work_dir/loaded-action"
 if [[ $mode == remove ]]; then
-  if ! run_loading 'Loading installed system applications…' flatpak list \
-      --system --app --columns=ref,name,description >"$work_dir/installed"; then
-    printf 'Could not list installed apps. Resolve the Flatpak error and try again.\n' >&2
-    exit 1
-  fi
-  if [[ ! -s $work_dir/installed ]]; then
-    printf 'No system Flatpak applications are installed.\n'
-    exit 0
-  fi
-  # Normalize list output to the full app refs used for validation and removal.
-  awk '{ if ($0 !~ /^app\//) printf "app/"; print }' "$work_dir/installed" >"$work_dir/catalog"
-  cp "$work_dir/catalog" "$work_dir/rows"
-  catalog_notice=''
   picker_color='pointer:red,marker:red'
   operation=(uninstall --system --app)
 else
-  load_install_catalog
   picker_color='pointer:green,marker:green'
   operation=(install --system --assumeyes flathub)
 fi
 
-# Keep the exact reference and metadata in the original fields. Display names
-# and descriptions/IDs in separate fields so only names are searched.
-LC_ALL=C sort -t $'\t' -f -k2,2 "$work_dir/rows" >"$work_dir/sorted"
-awk -F '\t' -v action="$mode" '
-  BEGIN { dim="\033[2m"; reset="\033[0m" }
-  {
-    split($1, ref, "/")
-    name=($2 == "" ? ref[2] : $2)
-    if (action == "install" && $4 != "") name=name "  ✓"
-    if (ref[4] != "stable") name=name " [" ref[4] "]"
-    printf "%s\t%s\t%s\t%s\t%-28s\t%s%s  · %s%s\n", $1, $2, $3, $4, name, dim, $3, ref[2], reset
-  }
-' "$work_dir/sorted" >"$work_dir/display"
-script_path=$(readlink -f -- "${BASH_SOURCE[0]}")
-printf -v preview '%q --preview %q {1} {2} {3} {4}' "$script_path" "$mode"
-header_args=()
-if [[ -n $catalog_notice ]]; then header_args=(--header="$catalog_notice"); fi
+# Open fzf while the pipe is still empty: its own loading spinner animates next
+# to 0/0, and the preview pane and prompt are available immediately, as in AUR.
+mkfifo "$work_dir/input"
+printf 'abort\n' >"$work_dir/loaded-action"
+setsid bash "$script_path" --load-catalog "$mode" "$work_dir" \
+  >"$work_dir/input" 2>"$work_dir/load-error" &
+loader_pid=$!
 
 pause_on_exit=0
 if FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' fzf \
     --multi --ansi --delimiter=$'\t' --with-nth=5,6 --nth=1 --no-hscroll \
-    --prompt='> ' "${header_args[@]}" \
+    --prompt='> ' --bind="load:transform:$loaded_action" \
     --preview "$preview" \
     --preview-label='alt-p: toggle description, alt-j/k: scroll, tab: multi-select' \
     --preview-label-pos=bottom --preview-window='down:65%:wrap' \
     --bind='alt-p:toggle-preview,alt-j:preview-down,alt-k:preview-up,alt-d:preview-half-page-down,alt-u:preview-half-page-up' \
     --color="$picker_color" \
-    <"$work_dir/display" >"$work_dir/selected"; then
-  :
+    <"$work_dir/input" >"$work_dir/selected"; then
+  picker_status=0
 else
-  status=$?
-  if [[ $status == 1 || $status == 130 ]]; then exit 0; fi
+  picker_status=$?
+fi
+# A selection can arrive just as the last rows are written. Let the worker
+# publish its final status before validating that selection.
+if [[ $picker_status == 0 && -s $work_dir/selected ]]; then
+  wait "$loader_pid" || true
+fi
+load_status=''
+if [[ -f $work_dir/load-status ]]; then load_status=$(cat "$work_dir/load-status"); fi
+stop_loader
+# Read worker failures separately: fzf's abort status must not hide a failed
+# refresh, missing remote, or unreadable installed-app list.
+if [[ -n $load_status ]]; then
+  cat "$work_dir/load-error" >&2
+  if [[ $load_status != 0 ]]; then
+    pause_on_exit=1
+    exit "$load_status"
+  fi
+  if [[ $mode == remove && ! -s $work_dir/catalog ]]; then pause_on_exit=1; fi
+elif [[ $picker_status == 0 && -s $work_dir/selected ]]; then
   pause_on_exit=1
-  printf 'The application picker failed (exit %s).\n' "$status" >&2
-  exit "$status"
+  printf 'The application catalog did not finish loading. No applications were changed.\n' >&2
+  exit 1
+fi
+if [[ $picker_status != 0 ]]; then
+  if [[ $picker_status == 1 || $picker_status == 130 ]]; then exit 0; fi
+  pause_on_exit=1
+  printf 'The application picker failed (exit %s).\n' "$picker_status" >&2
+  exit "$picker_status"
 fi
 [[ -s $work_dir/selected ]] || exit 0
 pause_on_exit=1

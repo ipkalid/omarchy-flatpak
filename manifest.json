@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ipkalid.flatpak-store",
   "name": "Flatpak Store",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Khalid Alhazmi",
   "license": "MIT",
   "description": "Install, remove, and update system Flatpak apps with familiar Omarchy terminal pickers.",

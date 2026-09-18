@@ -1,4 +1,3 @@
-import errno
 import importlib.util
 import json
 import os
@@ -6,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,14 +18,25 @@ REF_B = 'app/org.example.Two/x86_64/beta'
 CATALOG = f'{REF_A}\tApp One\tFirst application\n{REF_B}\tApp Two\tSecond application\n'
 
 STUB = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys, time
+import json, os, pathlib, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 with open(os.environ['CALLS'], 'a') as out:
     out.write(json.dumps([name, *args]) + '\n')
 if name == 'fzf':
+    if os.environ.get('PICK') == 'cancel-loading':
+        deadline = time.monotonic() + 2
+        while not pathlib.Path(os.environ['ROWS'] + '.loading').exists():
+            if time.monotonic() > deadline: sys.exit(2)
+            time.sleep(.01)
+        sys.exit(130)
     rows = sys.stdin.read()
     pathlib.Path(os.environ['ROWS']).write_text(rows)
+    action = next(arg.removeprefix('--bind=load:transform:') for arg in args
+                  if arg.startswith('--bind=load:transform:'))
+    loaded = subprocess.check_output(action, shell=True, text=True).strip()
+    pathlib.Path(os.environ['ROWS'] + '.action').write_text(loaded)
+    if loaded == 'abort': sys.exit(130)
     mode = os.environ.get('PICK', 'all')
     if mode == 'cancel': sys.exit(130)
     if mode == 'none': sys.exit(1)
@@ -38,6 +49,7 @@ if name == 'fzf':
 elif args[0] == 'remotes':
     print('other' if os.environ.get('NO_REMOTE') else 'flathub')
 elif args[0] == 'remote-ls':
+    pathlib.Path(os.environ['ROWS'] + '.loading').touch()
     time.sleep(float(os.environ.get('LOAD_DELAY', '0')))
     if os.environ.get('OFFLINE') and '--cached' not in args:
         print('Network unavailable', file=sys.stderr); sys.exit(1)
@@ -63,7 +75,7 @@ elif args[0] in ('info', 'remote-info'):
 
 
 class PickerTests(unittest.TestCase):
-    def run_picker(self, mode=None, terminal=False, **overrides):
+    def run_picker(self, mode=None, **overrides):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             commands = base / 'bin'
@@ -78,59 +90,28 @@ class PickerTests(unittest.TestCase):
             command = ['bash', str(ROOT / 'flatpak-store')]
             if isinstance(mode, list): command.extend(mode)
             elif mode: command.append(mode)
-            if terminal:
-                master, slave = os.openpty()
-                try:
-                    result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL,
-                                            stdout=subprocess.PIPE, stderr=slave,
-                                            text=True, timeout=10)
-                    os.close(slave)
-                    slave = None
-                    chunks = []
-                    while True:
-                        try:
-                            chunk = os.read(master, 4096)
-                        except OSError as error:
-                            if error.errno != errno.EIO:
-                                raise
-                            break
-                        if not chunk:
-                            break
-                        chunks.append(chunk)
-                    result.stderr = b''.join(chunks).decode()
-                finally:
-                    os.close(master)
-                    if slave is not None:
-                        os.close(slave)
-            else:
-                result = subprocess.run(command, env=env,
-                                        capture_output=True, text=True, timeout=10)
+            result = subprocess.run(command, env=env,
+                                    capture_output=True, text=True, timeout=10)
             calls = [json.loads(line) for line in (base / 'calls').read_text().splitlines()] if (base / 'calls').exists() else []
             rows = (base / 'rows').read_text() if (base / 'rows').exists() else ''
+            self.loaded_action = (base / 'rows.action').read_text() if (base / 'rows.action').exists() else ''
             self.assertEqual(list(base.glob('flatpak-store.*')), [], 'Temporary data leaked')
             return result, calls, rows
 
-    def test_loading_spinner_in_terminal_and_cache_fallback(self):
-        for extra in ({}, {'OFFLINE': '1'}, {'OFFLINE': '1', 'NO_CACHE': '1'}):
-            with self.subTest(extra=extra):
-                result, calls, _ = self.run_picker(
-                    terminal=True, TERM='xterm-256color', LOAD_DELAY='0.25', PICK='cancel', **extra)
-                self.assertEqual(result.returncode, 1 if extra.get('NO_CACHE') else 0)
-                self.assertIn('⠋ Loading Flathub applications…', result.stderr)
-                self.assertIn('⠙ Loading Flathub applications…', result.stderr)
-                self.assertIn('\r\x1b[K', result.stderr)
-                if extra.get('OFFLINE'):
-                    self.assertIn('\r\x1b[KNetwork unavailable', result.stderr)
-                    self.assertIn('Loading cached Flathub applications…', result.stderr)
-                if extra.get('NO_CACHE'):
-                    self.assertFalse(any(c[0] == 'fzf' for c in calls))
-
-    def test_loading_without_terminal_uses_plain_messages(self):
-        result, _, _ = self.run_picker(PICK='cancel')
+    def test_picker_opens_before_catalog_finishes(self):
+        result, calls, _ = self.run_picker(LOAD_DELAY='0.25', PICK='cancel')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('Loading Flathub applications…\n', result.stderr)
-        self.assertNotIn('\x1b', result.stderr)
-        self.assertNotIn('⠋', result.stderr)
+        picker_index = next(i for i, c in enumerate(calls) if c[0] == 'fzf')
+        installed_index = next(i for i, c in enumerate(calls) if c[:2] == ['flatpak', 'list'])
+        self.assertLess(picker_index, installed_index)
+        self.assertNotIn('Loading Flathub', result.stderr)
+
+    def test_escape_during_loading_returns_immediately(self):
+        start = time.monotonic()
+        result, calls, _ = self.run_picker(LOAD_DELAY='5', PICK='cancel-loading')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(time.monotonic() - start, 2)
+        self.assertFalse(any(c[:2] == ['flatpak', 'install'] for c in calls))
 
     def test_exact_refs_and_installed_marker(self):
         result, calls, rows = self.run_picker()
@@ -178,7 +159,7 @@ class PickerTests(unittest.TestCase):
         result, calls, _ = self.run_picker(OFFLINE='1', PICK='cancel')
         self.assertEqual(result.returncode, 0)
         self.assertTrue(any('--cached' in c for c in calls if c[:2] == ['flatpak', 'remote-ls']))
-        self.assertTrue(any('STALE CACHE' in arg for c in calls for arg in c))
+        self.assertIn('STALE CACHE', self.loaded_action)
 
     def test_unavailable_catalog_and_setup_errors(self):
         for overrides in ({'OFFLINE': '1', 'NO_CACHE': '1'}, {'EMPTY_CATALOG': '1'},
@@ -186,7 +167,7 @@ class PickerTests(unittest.TestCase):
             with self.subTest(overrides=overrides):
                 result, calls, _ = self.run_picker(**overrides)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(any(c[0] == 'fzf' for c in calls))
+                self.assertEqual(self.loaded_action, 'abort')
                 self.assertFalse(any(c[:2] == ['flatpak', 'install'] for c in calls))
 
     def test_install_failure_is_preserved(self):
@@ -209,7 +190,7 @@ class PickerTests(unittest.TestCase):
         self.assertIn('--color=pointer:red,marker:red', picker)
         self.assertIn('--preview remove {1}', picker[picker.index('--preview') + 1])
         self.assertIn('alt-d:preview-half-page-down,alt-u:preview-half-page-up',
-                      next(arg for arg in picker if arg.startswith('--bind=')))
+                      next(arg for arg in picker if arg.startswith('--bind=alt-p:')))
 
     def test_remove_cancellation_and_empty_selection(self):
         for pick in ('cancel', 'none', 'empty'):
@@ -233,14 +214,16 @@ class PickerTests(unittest.TestCase):
     def test_remove_empty_installation(self):
         result, calls, _ = self.run_picker('remove', INSTALLED_ROWS='')
         self.assertEqual(result.returncode, 0)
-        self.assertIn('No system Flatpak applications are installed', result.stdout)
-        self.assertFalse(any(c[0] == 'fzf' or c[:2] == ['flatpak', 'uninstall'] for c in calls))
+        self.assertIn('No system Flatpak applications are installed', result.stderr)
+        self.assertFalse(any(c[:2] == ['flatpak', 'uninstall'] for c in calls))
+        self.assertEqual(self.loaded_action, 'abort')
 
     def test_remove_list_failure(self):
         result, calls, _ = self.run_picker('remove', LIST_ERROR='1')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Could not list installed apps', result.stderr)
-        self.assertFalse(any(c[0] == 'fzf' or c[:2] == ['flatpak', 'uninstall'] for c in calls))
+        self.assertFalse(any(c[:2] == ['flatpak', 'uninstall'] for c in calls))
+        self.assertEqual(self.loaded_action, 'abort')
 
     def test_remove_failure_is_preserved(self):
         result, _, _ = self.run_picker('remove', UNINSTALL_EXIT='9')
