@@ -7,7 +7,7 @@ Use the provider tabs (or Left/Right) to switch between them.
 | Provider | Install | Remove | Update All |
 | --- | --- | --- | --- |
 | Flatpak | Browse system Flathub apps | Select system apps; keep saved data | Update system apps and runtimes |
-| Brew | Browse Homebrew formulae | Select installed formulae and confirm | Refresh metadata, then upgrade formulae |
+| Brew | Browse Homebrew formulae | Select installed formulae and confirm | Refresh metadata, then upgrade packages |
 | mise | Choose a tool, then Latest or an exact version | Choose a tool, then installed versions and confirm | Not provided |
 
 mise installation selects **Latest** at the bottom beside the prompt, with newer
@@ -117,7 +117,7 @@ operations remain visible until Enter is pressed.
 Brew and mise catalog queries time out after 45 seconds each; Brew previews time
 out after 15 seconds. Empty results and lookup failures are shown explicitly.
 Escape stops the pending lookup. Package transactions have no lookup timeout.
-Brew Update All runs `brew update` and, on success, `brew upgrade --formula`,
+Brew Update All runs `brew update` and, on success, `brew upgrade`,
 respecting normal Homebrew pinning. Brew removal does not force dependency
 removal or add a separate cleanup command; Homebrew's normal behavior applies.
 mise commands run from your home directory so launching the panel from a project

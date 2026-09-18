@@ -30,7 +30,7 @@ Ui.Panel {
   readonly property var actions: [
     { action: "install", title: "Install", detail: provider === "flatpak" ? "Find apps on Flathub" : provider === "brew" ? "Browse Homebrew formulae" : "Choose a tool and version", icon: "󰏖" },
     { action: "remove", title: "Remove", detail: provider === "flatpak" ? "Uninstall apps; keep saved data" : provider === "brew" ? "Choose installed formulae" : "Choose installed tool versions", icon: "󰭌" },
-    { action: "update", title: "Update All", detail: provider === "brew" ? "Refresh Homebrew and upgrade formulae" : "Update system apps and runtimes", icon: "󰚰" },
+    { action: "update", title: "Update All", detail: provider === "brew" ? "Refresh Homebrew and upgrade packages" : "Update system apps and runtimes", icon: "󰚰" },
     { action: "setup", title: settingUp ? "Adding menu shortcuts…" : menuBusy ? "Checking menu shortcuts…" : menuState === "complete" ? "Menu shortcuts added" : "Add menu shortcuts",
       detail: "Add Flatpak, Brew, and mise menu entries", icon: menuState === "complete" ? "✓" : "󰐕" },
     { action: "check", title: checking ? "Checking requirements…" : "Check again", detail: "Refresh requirements and menu status", icon: "󰑐" }

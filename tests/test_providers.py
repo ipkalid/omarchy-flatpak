@@ -104,7 +104,7 @@ class ProviderTests(unittest.TestCase):
         result, calls = self.run_store(action='update', HOMEBREW_PREFIX=str(prefix),
                                        PATH=str(self.bin) + ':/usr/bin:/bin')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade', '--formula']])
+        self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade']])
 
     def test_brew_on_path_takes_precedence_over_prefix(self):
         prefix = self.home / 'other brew'
@@ -114,7 +114,7 @@ class ProviderTests(unittest.TestCase):
         brew.chmod(0o755)
         result, calls = self.run_store(action='update', HOMEBREW_PREFIX=str(prefix))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade', '--formula']])
+        self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade']])
 
     def test_brew_install_exact_formulae(self):
         result, calls = self.run_store(choices=('0,1,1,2',))
@@ -137,7 +137,7 @@ class ProviderTests(unittest.TestCase):
     def test_update_refresh_then_upgrade(self):
         result, calls = self.run_store(action='update')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade', '--formula']])
+        self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade']])
         self.assertFalse(any(name == 'fzf' for name, _, _ in calls))
 
     def test_failed_refresh_prevents_upgrade(self):

@@ -239,7 +239,7 @@ def run(provider, action):
         os.chdir(Path.home())
     if action == 'update':
         transact(['brew', 'update'])
-        transact(['brew', 'upgrade', '--formula'])
+        transact(['brew', 'upgrade'])
     else:
         selected = pick(provider, action, multi=provider == 'brew')
         if not selected:
