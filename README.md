@@ -7,7 +7,8 @@ An Omarchy shell plugin with three actions:
 - **Remove** — select installed system apps; retain saved app data.
 - **Update All** — update all system Flatpak apps and runtimes in one operation.
 
-All package operations show Flatpak’s normal confirmation and progress.
+Install and Update All automatically confirm Flatpak’s prompts and show progress.
+Remove shows Flatpak’s normal confirmation and progress.
 
 ![Flatpak Store panel](preview.png)
 
@@ -60,8 +61,8 @@ ongoing package transaction. No second Quickshell process is started.
 
 In the installation and removal pickers:
 
-- Type to search app names, descriptions, and IDs.
-- Tab selects multiple apps; Enter opens Flatpak’s confirmation.
+- Type to search app names only; descriptions and IDs remain visible.
+- Tab selects multiple apps; Enter installs immediately or opens Flatpak’s removal confirmation.
 - Alt+P toggles details; Alt+J/K scroll; Alt+D/U scroll half a page.
 - Escape cancels without changing apps.
 
@@ -72,12 +73,13 @@ beside their names. Full references retain architecture and branch for operation
 Installation waits up to 45 seconds for the Flathub catalog, then tries a local
 cache with a visible stale-data notice. Previews time out after 15 seconds.
 Removal preserves saved app data and does not force removal or separately clean
-up unused runtimes. Update All runs `flatpak update --system`, retaining normal
-confirmation. Errors and completed operations remain visible until Enter is pressed.
+up unused runtimes. Install and Update All use `--assumeyes` to skip confirmation.
+Update All runs `flatpak update --system --assumeyes`. Errors and completed
+operations remain visible until Enter is pressed.
 
 The plugin runs with your user permissions, as other Omarchy plugins do. Flatpak
 handles any required system authentication. The plugin does not run `sudo`,
-suppress confirmation, download executables at startup, or run a background service.
+download executables at startup, or run a background service.
 
 ## Menu setup, migration, and cleanup
 

@@ -70,8 +70,9 @@ case ${1:-} in
     printf '%s\n' 'Usage: flatpak-store [remove|update]' \
       'Default: search and install system Flathub apps.' \
       'remove: select installed system apps for removal; saved app data is retained.' \
-      'update: update all system apps and runtimes with Flatpak confirmation.' \
-      'Tab selects, Enter opens Flatpak confirmation, Escape cancels.'
+      'update: update all system apps and runtimes without confirmation.' \
+      'Search matches app names only. Tab selects, Escape cancels.' \
+      'Enter installs immediately or opens Flatpak removal confirmation.'
     exit 0 ;;
   remove) mode=remove ;;
   update) mode=update ;;
@@ -86,7 +87,7 @@ if [[ $mode == update ]]; then
     exit 1
   fi
   printf 'Updating system Flatpak apps and runtimes…\n'
-  if flatpak update --system; then
+  if flatpak update --system --assumeyes; then
     printf '\nFlatpak finished.\n'
   else
     status=$?
@@ -165,12 +166,11 @@ if [[ $mode == remove ]]; then
 else
   load_install_catalog
   picker_color='pointer:green,marker:green'
-  operation=(install --system flathub)
+  operation=(install --system --assumeyes flathub)
 fi
 
-# Keep the exact reference and metadata in the original fields. Only the fifth
-# field is displayed/searched: aligned names, subtle descriptions, and app IDs.
-# Metadata stays searchable without filling the list with app/arch/branch refs.
+# Keep the exact reference and metadata in the original fields. Display names
+# and descriptions/IDs in separate fields so only names are searched.
 LC_ALL=C sort -t $'\t' -f -k2,2 "$work_dir/rows" >"$work_dir/sorted"
 awk -F '\t' -v action="$mode" '
   BEGIN { dim="\033[2m"; reset="\033[0m" }
@@ -179,7 +179,7 @@ awk -F '\t' -v action="$mode" '
     name=($2 == "" ? ref[2] : $2)
     if (action == "install" && $4 != "") name=name "  ✓"
     if (ref[4] != "stable") name=name " [" ref[4] "]"
-    printf "%s\t%s\t%s\t%s\t%-28s  %s%s  · %s%s\n", $1, $2, $3, $4, name, dim, $3, ref[2], reset
+    printf "%s\t%s\t%s\t%s\t%-28s\t%s%s  · %s%s\n", $1, $2, $3, $4, name, dim, $3, ref[2], reset
   }
 ' "$work_dir/sorted" >"$work_dir/display"
 script_path=$(readlink -f -- "${BASH_SOURCE[0]}")
@@ -189,7 +189,7 @@ if [[ -n $catalog_notice ]]; then header_args=(--header="$catalog_notice"); fi
 
 pause_on_exit=0
 if FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' fzf \
-    --multi --ansi --delimiter=$'\t' --with-nth=5 --no-hscroll \
+    --multi --ansi --delimiter=$'\t' --with-nth=5,6 --nth=1 --no-hscroll \
     --prompt='> ' "${header_args[@]}" \
     --preview "$preview" \
     --preview-label='alt-p: toggle description, alt-j/k: scroll, tab: multi-select' \

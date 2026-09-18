@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -85,13 +86,30 @@ class PickerTests(unittest.TestCase):
     def test_exact_refs_and_installed_marker(self):
         result, calls, rows = self.run_picker()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(['flatpak', 'install', '--system', 'flathub', REF_A, REF_B], calls)
+        self.assertIn(['flatpak', 'install', '--system', '--assumeyes', 'flathub', REF_A, REF_B], calls)
         self.assertIn('First application\t[installed]', rows)
         self.assertNotIn('Second application\t[installed]', rows)
         picker = next(call for call in calls if call[0] == 'fzf')
         self.assertIn('--multi', picker)
         self.assertIn('--preview', picker)
         self.assertIn('--preview install {1}', picker[picker.index('--preview') + 1])
+
+    @unittest.skipUnless(shutil.which('fzf'), 'fzf is required to verify search matching')
+    def test_search_matches_names_only(self):
+        for mode in (None, 'remove'):
+            result, calls, rows = self.run_picker(mode)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            picker_args = next(call[1:] for call in calls if call[0] == 'fzf')
+            for query, expected in (('App One', [REF_A]), ('ApTw', [REF_B]),
+                                    ('First application', []), ('org.example', [])):
+                with self.subTest(mode=mode, query=query):
+                    filtered = subprocess.run(
+                        ['fzf', *picker_args, '--filter=' + query], input=rows,
+                        capture_output=True, text=True, timeout=10,
+                        env=dict(os.environ, FZF_DEFAULT_OPTS='', FZF_DEFAULT_OPTS_FILE=''))
+                    self.assertEqual(filtered.returncode, 0 if expected else 1, filtered.stderr)
+                    self.assertEqual([line.split('\t')[0] for line in filtered.stdout.splitlines()],
+                                     expected)
 
     def test_cancellation_and_empty_selection(self):
         for mode in ('cancel', 'none', 'empty'):
@@ -215,12 +233,12 @@ class PickerTests(unittest.TestCase):
             with self.subTest(extra=extra):
                 result, calls, _ = self.run_picker('update', **extra)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(calls, [['flatpak', 'update', '--system']])
+                self.assertEqual(calls, [['flatpak', 'update', '--system', '--assumeyes']])
 
     def test_update_failure_status_and_output(self):
         result, calls, _ = self.run_picker('update', UPDATE_EXIT='8')
         self.assertEqual(result.returncode, 8)
-        self.assertEqual(calls, [['flatpak', 'update', '--system']])
+        self.assertEqual(calls, [['flatpak', 'update', '--system', '--assumeyes']])
         self.assertIn('update did not complete successfully', result.stderr)
         self.assertNotIn('Flatpak finished', result.stdout)
 
