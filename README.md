@@ -7,7 +7,7 @@ Use the provider tabs (or Left/Right) to switch between them.
 | Provider | Install | Remove | Update All |
 | --- | --- | --- | --- |
 | Flatpak | Browse system Flathub apps | Select system apps; keep saved data | Update system apps and runtimes |
-| Brew | Browse Homebrew formulae | Select installed formulae and confirm | Refresh metadata, then upgrade packages |
+| Brew | Browse Homebrew formulae and casks | Select installed formulae and casks and confirm | Refresh metadata, then upgrade packages |
 | mise | Choose a tool, then Latest or an exact version | Choose a tool, then installed versions and confirm | Not provided |
 
 mise installation selects **Latest** at the bottom beside the prompt, with newer
@@ -15,8 +15,9 @@ explicit versions nearest it above. Latest installs `tool@latest`, letting mise 
 release when the installation starts. Installation does **not** change global or
 project defaults. Removal leaves
 mise configuration untouched, including references to removed versions. Brew
-supports Linux formulae, including configured taps; casks and tap management are
-outside this version's scope. mise installation browses its bundled registry;
+supports Linux formulae and casks, including configured taps; tap management is
+outside this version's scope. Mixed selections run one brew command per kind,
+since brew rejects formulae and casks in the same transaction. mise installation browses its bundled registry;
 custom backend entry is not provided.
 
 The plugin ID remains `ipkalid.flatpak-store` so existing installations and
@@ -90,7 +91,7 @@ ongoing package transaction. No second Quickshell process is started.
 In the installation and removal pickers:
 
 - Type to search names (or versions in the mise version picker); descriptions remain visible.
-- Tab selects multiple Flatpak apps, Brew formulae, or mise versions for removal.
+- Tab selects multiple Flatpak apps, Brew formulae/casks, or mise versions for removal.
   mise installation selects one tool and one version at a time.
 - Enter installs the selection or opens removal confirmation.
 - Alt+P toggles details; Alt+J/K scroll; Alt+D/U scroll half a page.

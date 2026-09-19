@@ -1,3 +1,13 @@
+# Package Store (unreleased)
+
+- Brew install and remove now include casks alongside formulae. The install
+  catalog merges locally tapped casks with the full API catalog, rows are
+  labelled Formula/Cask in the details pane, previews query the right kind,
+  and mixed selections run one brew command per kind (brew rejects mixing
+  formulae and casks in a single transaction). `brew upgrade` already
+  upgrades both kinds, so Update All is unchanged.
+- Validated with 67 tests.
+
 # Package Store v1.2.1
 
 Fix Brew being reported as missing when Omarchy's desktop PATH does not include

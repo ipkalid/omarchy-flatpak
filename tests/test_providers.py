@@ -55,10 +55,18 @@ if name == 'brew':
         if '--json=v2' in args:
             print(json.dumps({'formulae': [] if os.environ.get('EMPTY') else [
                 {'name': 'alpha', 'full_name': 'alpha', 'desc': 'Alpha utility', 'installed': [{'version': '1.0'}]},
-                {'name': 'beta', 'full_name': 'owner/tap/beta', 'desc': 'Beta utility', 'installed': [{'version': '2.0'}]}]}))
+                {'name': 'beta', 'full_name': 'owner/tap/beta', 'desc': 'Beta utility', 'installed': [{'version': '2.0'}]}],
+                'casks': [] if os.environ.get('EMPTY') else [
+                {'token': 'gamma', 'full_token': 'gamma', 'desc': 'Gamma app', 'installed': '3.0'},
+                {'token': 'delta', 'full_token': 'owner/tap/delta', 'desc': 'Delta app', 'installed': '4.0'}]}))
+        elif '--cask' in args: print('Cask details\nVersion: 3.0')
         else: print('Formula details\nVersion: 1.0')
     elif args[0] == 'formulae':
         print('alpha\nowner/tap/beta\npython@3.13')
+    elif args[0] == 'casks':
+        print('alpha\ngamma\nowner/tap/delta')
+    elif args[0] == 'search':
+        print('alpha\ngamma\nepsilon')
 elif name == 'mise':
     if args[0] == 'ls':
         print(json.dumps({} if os.environ.get('EMPTY') else {'node': [
@@ -116,18 +124,41 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.transactions(calls), [['brew', 'update'], ['brew', 'upgrade']])
 
-    def test_brew_install_exact_formulae(self):
-        result, calls = self.run_store(choices=('0,1,1,2',))
+    def test_brew_install_exact_formulae_and_casks(self):
+        # Install catalog rows sorted casefold: alpha(formula), alpha(cask), epsilon,
+        # gamma, owner/tap/beta, owner/tap/delta, python@3.13.
+        result, calls = self.run_store(choices=('0,3,3,6',))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.transactions(calls), [['brew', 'install', '--formula', 'alpha', 'owner/tap/beta', 'python@3.13']])
+        self.assertEqual(self.transactions(calls), [['brew', 'install', '--formula', 'alpha', 'python@3.13'],
+                                                    ['brew', 'install', '--cask', 'gamma']])
         self.assertIn('--multi', next(args for name, args, _ in calls if name == 'fzf'))
 
+    def test_brew_install_catalog_merges_api_only_casks(self):
+        with patch.object(store, 'query_json', return_value={'formulae': [], 'casks': []}), \
+                patch.object(store, 'query', side_effect=lambda argv: {
+                    'formulae': 'alpha\nowner/tap/beta\npython@3.13',
+                    'casks': 'alpha\nowner/tap/delta',
+                    'search': 'alpha\ngamma\nepsilon\nowner/tap/delta'}[argv[1]]):
+            rows = store.brew_catalog('install')
+        self.assertEqual([(item['key'], item['kind'], item['installed']) for item in rows],
+                         [('alpha', 'formula', False), ('alpha', 'cask', False), ('epsilon', 'cask', False),
+                          ('gamma', 'cask', False), ('owner/tap/beta', 'formula', False),
+                          ('owner/tap/delta', 'cask', False), ('python@3.13', 'formula', False)])
+
+    def test_brew_token_existing_as_both_kinds_installs_each(self):
+        result, calls = self.run_store(choices=('0,1',))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.transactions(calls), [['brew', 'install', '--formula', 'alpha'],
+                                                    ['brew', 'install', '--cask', 'alpha']])
+
     def test_brew_remove_and_confirmation(self):
+        # Removal rows sorted casefold: alpha, gamma, owner/tap/beta, owner/tap/delta.
         result, calls = self.run_store(action='remove', choices=('1',))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.transactions(calls), [['brew', 'uninstall', '--formula', 'owner/tap/beta']])
-        self.assertIn('owner/tap/beta', result.stdout)
-        self.assertFalse(any(name == 'brew' and args[0] == 'formulae' for name, args, _ in calls))
+        self.assertEqual(self.transactions(calls), [['brew', 'uninstall', '--cask', 'gamma']])
+        self.assertIn('Remove these formulae and casks?', result.stdout)
+        self.assertIn('gamma', result.stdout)
+        self.assertFalse(any(name == 'brew' and args[0] in ('formulae', 'casks') for name, args, _ in calls))
 
     def test_declining_removal(self):
         result, calls = self.run_store(action='remove', answer='n\n')
@@ -262,16 +293,20 @@ class ProviderTests(unittest.TestCase):
         directory = self.home / 'preview'
         directory.mkdir()
         (directory / 'rows.json').write_text(json.dumps([
-            store.row('owner/tap/beta', details='Formula details', installed=True)]))
-        result = subprocess.run([sys.executable, str(ROOT / 'package_store.py'), '--preview',
-                                 'brew', str(directory), '0'], env=self.env,
-                                capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('Status: Installed', result.stdout)
-        self.assertIn('Version: 1.0', result.stdout)
+            store.row('owner/tap/beta', details='Formula details', installed=True, kind='formula'),
+            store.row('gamma', details='Cask details', installed=True, kind='cask')]))
+        for index, status in (('0', 'Version: 1.0'), ('1', 'Version: 3.0')):
+            result = subprocess.run([sys.executable, str(ROOT / 'package_store.py'), '--preview',
+                                     'brew', str(directory), index], env=self.env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('Status: Installed', result.stdout)
+            self.assertIn(status, result.stdout)
         calls = [json.loads(line) for line in (self.home / 'calls').read_text().splitlines()]
         self.assertEqual(self.transactions(calls), [])
-        self.assertIn(['info', '--formula', 'owner/tap/beta'], [args for name, args, _ in calls if name == 'brew'])
+        brew_calls = [args for name, args, _ in calls if name == 'brew']
+        self.assertIn(['info', '--formula', 'owner/tap/beta'], brew_calls)
+        self.assertIn(['info', '--cask', 'gamma'], brew_calls)
 
     def test_missing_dependencies_stop_before_picker(self):
         for provider in ('brew', 'mise'):

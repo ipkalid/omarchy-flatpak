@@ -48,24 +48,32 @@ def query_json(argv):
         raise StoreError('The package manager returned invalid JSON.') from error
 
 
-def row(key, name=None, description='', details='', installed=False):
+def row(key, name=None, description='', details='', installed=False, kind=None):
     return dict(key=identifier(key), name=clean(name or key), description=clean(description),
-                details=details, installed=installed)
+                details=details, installed=installed, kind=kind)
 
 
 def brew_catalog(action):
-    installed = query_json(['brew', 'info', '--json=v2', '--installed'])['formulae']
-    by_name = {item.get('full_name', item['name']): item for item in installed}
+    data = query_json(['brew', 'info', '--json=v2', '--installed'])
+    # Casks report their installed version as a plain string, formulae as a list.
+    # Keys are (name, kind) pairs because a token can exist as both kinds.
+    installed = {(item.get('full_name', item['name']), 'formula'): item for item in data.get('formulae', [])}
+    installed.update({(item.get('full_token', item['token']), 'cask'): item for item in data.get('casks', [])})
     if action == 'remove':
-        names = list(by_name)
+        names = list(installed)
     else:
-        names = query(['brew', 'formulae']).splitlines()
+        names = [(name, 'formula') for name in query(['brew', 'formulae']).splitlines()]
+        # brew casks skips casks that exist only in the API, so also enumerate
+        # the full catalog; the regex matches every cask token.
+        names += [(name, 'cask') for name in query(['brew', 'casks']).splitlines()]
+        names += [(name, 'cask') for name in query(['brew', 'search', '--casks', '/./']).splitlines()]
     rows = []
-    for name in sorted(set(names), key=str.casefold):
-        item = by_name.get(name, {})
-        versions = ', '.join(v['version'] for v in item.get('installed', []))
-        rows.append(row(name, description=item.get('desc', ''), installed=name in by_name,
-                        details=f'Formula: {clean(name)}\nInstalled versions: {clean(versions) or "None"}'))
+    for name, kind in sorted(set(names), key=lambda item: (item[0].casefold(), item[1] != 'formula')):
+        item = installed.get((name, kind), {})
+        versions = item.get('installed') if kind == 'cask' else ', '.join(
+            v['version'] for v in item.get('installed', []))
+        rows.append(row(name, kind=kind, description=item.get('desc', ''), installed=bool(item),
+                        details=f'{kind.capitalize()}: {clean(name)}\nInstalled versions: {clean(versions) or "None"}'))
     return rows
 
 
@@ -193,7 +201,7 @@ def pick(provider, action, stage='tools', tool='', multi=False):
             indices = list(dict.fromkeys(line.split('\t')[0] for line in selected.splitlines()))
             if (not multi and len(indices) != 1) or any(not i.isdecimal() or int(i) >= len(rows) for i in indices):
                 raise StoreError('Invalid selection; no packages were changed.')
-            return [rows[int(index)]['key'] for index in indices]
+            return [rows[int(index)] for index in indices]
         finally:
             if picker is not None and picker.poll() is None:
                 picker.terminate()
@@ -214,8 +222,9 @@ def preview(provider, directory, index):
     print(item['description'])
     print(item['details'])
     if provider == 'brew':
+        flag = '--cask' if item.get('kind') == 'cask' else '--formula'
         try:
-            print('\n'.join(clean(line) for line in query(['brew', 'info', '--formula', identifier(item['key'])], timeout=15).splitlines()))
+            print('\n'.join(clean(line) for line in query(['brew', 'info', flag, identifier(item['key'])], timeout=15).splitlines()))
         except StoreError:
             print('Additional details are unavailable.')
     return 0
@@ -245,19 +254,27 @@ def run(provider, action):
         if not selected:
             return selected is not None
         if provider == 'mise':
-            selected = pick(provider, action, stage='versions', tool=selected[0], multi=action == 'remove')
+            selected = pick(provider, action, stage='versions', tool=selected[0]['key'], multi=action == 'remove')
             if not selected:
                 return selected is not None
+        names = [item['key'] for item in selected]
         if action == 'remove':
-            print('Remove these ' + ('tool versions' if provider == 'mise' else 'formulae') + '?')
-            for name in selected:
+            print('Remove these ' + ('tool versions' if provider == 'mise' else 'formulae and casks') + '?')
+            for name in names:
                 print('  ' + name)
             if provider == 'mise':
                 print('mise configuration stays unchanged, including references to these versions.')
             if input('Continue? [y/N] ').strip().lower() not in ('y', 'yes'):
                 return False
         operation = 'install' if action == 'install' else 'uninstall'
-        transact([provider, operation, *(['--formula'] if provider == 'brew' else []), *selected])
+        if provider == 'mise':
+            transact(['mise', operation, *names])
+        else:
+            # brew conflicts --formula with --cask, so each kind needs its own command.
+            for kind in ('formula', 'cask'):
+                matching = [item['key'] for item in selected if item.get('kind', 'formula') == kind]
+                if matching:
+                    transact(['brew', operation, '--' + kind, *matching])
     print(f'\n{provider} finished.')
     return True
 
