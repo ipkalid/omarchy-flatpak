@@ -47,7 +47,11 @@ if name == 'fzf':
     if mode == 'duplicate': print(rows + rows, end=''); sys.exit(0)
     print(rows, end='')
 elif args[0] == 'remotes':
-    print('other' if os.environ.get('NO_REMOTE') else 'flathub')
+    if '--user' in args:
+        value = os.environ.get('USER_REMOTES', '')
+    else:
+        value = os.environ.get('REMOTES', '') if os.environ.get('NO_REMOTE') else os.environ.get('REMOTES', 'flathub')
+    if value: print(value)
 elif args[0] == 'remote-ls':
     pathlib.Path(os.environ['ROWS'] + '.loading').touch()
     time.sleep(float(os.environ.get('LOAD_DELAY', '0')))
@@ -58,16 +62,17 @@ elif args[0] == 'remote-ls':
 elif args[0] == 'list':
     if os.environ.get('LIST_ERROR'): sys.exit(1)
     if '--columns=ref,name,description' in args:
-        print(os.environ.get('INSTALLED_ROWS', ''.join(line.removeprefix('app/')
+        print(os.environ.get('USER_INSTALLED_ROWS' if '--user' in args else 'INSTALLED_ROWS', '' if '--user' in args else ''.join(line.removeprefix('app/')
               for line in os.environ['CATALOG'].splitlines(keepends=True))), end='')
-    else: print('org.example.One/x86_64/stable')
+    elif '--user' not in args or os.environ.get('USER_INSTALLED'):
+        print('org.example.One/x86_64/stable')
 elif args[0] == 'install':
     sys.exit(int(os.environ.get('INSTALL_EXIT', '0')))
 elif args[0] == 'uninstall':
     sys.exit(int(os.environ.get('UNINSTALL_EXIT', '0')))
 elif args[0] == 'update':
     print('Nothing to do.' if os.environ.get('NO_UPDATES') else 'Updating apps and runtimes')
-    sys.exit(int(os.environ.get('UPDATE_EXIT', '0')))
+    sys.exit(int(os.environ.get('USER_UPDATE_EXIT' if '--user' in args else 'UPDATE_EXIT', '0')))
 elif args[0] in ('info', 'remote-info'):
     print(os.environ.get('METADATA', 'Version: 1.2\nLicense: MIT\nCommit: secret-hash\nInstalled Size: 10 MB'))
     sys.exit(int(os.environ.get('PREVIEW_EXIT', '0')))
@@ -170,6 +175,48 @@ class PickerTests(unittest.TestCase):
                 self.assertEqual(self.loaded_action, 'abort')
                 self.assertFalse(any(c[:2] == ['flatpak', 'install'] for c in calls))
 
+    def test_all_remotes_keep_duplicate_refs_and_install_from_each_origin(self):
+        result, calls, rows = self.run_picker(REMOTES='flathub\nexample')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for remote in ('flathub', 'example'):
+            self.assertIn(['flatpak', 'install', '--system', '--assumeyes', remote, REF_A, REF_B], calls)
+            self.assertIn(' · ' + remote, rows)
+        self.assertEqual(len(rows.splitlines()), 4)
+
+    def test_non_flathub_remote_is_sufficient(self):
+        result, calls, _ = self.run_picker(REMOTES='example')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(['flatpak', 'install', '--system', '--assumeyes', 'example', REF_A, REF_B], calls)
+
+    def test_user_only_repository_installs_in_user_scope(self):
+        result, calls, rows = self.run_picker(NO_REMOTE='1', USER_REMOTES='personal')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(['flatpak', 'install', '--user', '--assumeyes', 'personal', REF_A, REF_B], calls)
+        self.assertIn('personal (user)', rows)
+        self.assertNotIn('[installed]', rows)
+
+    def test_same_remote_and_ref_in_both_scopes_stay_distinct(self):
+        result, calls, rows = self.run_picker(USER_REMOTES='flathub', PICK='duplicate')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for scope in ('system', 'user'):
+            self.assertEqual(calls.count(['flatpak', 'install', '--' + scope, '--assumeyes', 'flathub', REF_A, REF_B]), 1)
+        self.assertEqual(len(rows.splitlines()), 4)
+        self.assertEqual(rows.count('[installed]'), 1)
+
+    def test_user_preview_uses_user_remote(self):
+        result, calls, _ = self.run_picker(
+            ['--preview', 'install', REF_A, 'App One', 'Description', '', 'personal', 'user'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [['flatpak', 'remote-info', '--user', '--cached', 'personal', REF_A]])
+        self.assertIn('Installation    : User', result.stdout)
+
+    def test_preview_uses_selected_remote(self):
+        result, calls, _ = self.run_picker(
+            ['--preview', 'install', REF_A, 'App One', 'Description', '', 'example'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [['flatpak', 'remote-info', '--system', '--cached', 'example', REF_A]])
+        self.assertIn('Repository      : example', result.stdout)
+
     def test_install_failure_is_preserved(self):
         result, _, _ = self.run_picker(INSTALL_EXIT='7')
         self.assertEqual(result.returncode, 7)
@@ -214,7 +261,7 @@ class PickerTests(unittest.TestCase):
     def test_remove_empty_installation(self):
         result, calls, _ = self.run_picker('remove', INSTALLED_ROWS='')
         self.assertEqual(result.returncode, 0)
-        self.assertIn('No system Flatpak applications are installed', result.stderr)
+        self.assertIn('No system or user Flatpak applications are installed', result.stderr)
         self.assertFalse(any(c[:2] == ['flatpak', 'uninstall'] for c in calls))
         self.assertEqual(self.loaded_action, 'abort')
 
@@ -224,6 +271,27 @@ class PickerTests(unittest.TestCase):
         self.assertIn('Could not list installed apps', result.stderr)
         self.assertFalse(any(c[:2] == ['flatpak', 'uninstall'] for c in calls))
         self.assertEqual(self.loaded_action, 'abort')
+
+    def test_remove_user_only_apps(self):
+        result, calls, rows = self.run_picker('remove', INSTALLED_ROWS='', USER_INSTALLED_ROWS=CATALOG)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(['flatpak', 'uninstall', '--user', '--app', REF_A, REF_B], calls)
+        self.assertFalse(any(c[:3] == ['flatpak', 'uninstall', '--system'] for c in calls))
+        self.assertIn(' · user', rows)
+
+    def test_remove_same_ref_in_both_scopes_deduplicates_within_scope(self):
+        result, calls, rows = self.run_picker('remove', USER_INSTALLED_ROWS=CATALOG, PICK='duplicate')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for scope in ('system', 'user'):
+            self.assertEqual(calls.count(['flatpak', 'uninstall', '--' + scope, '--app', REF_A, REF_B]), 1)
+        self.assertEqual(len(rows.splitlines()), 4)
+
+    def test_remove_user_preview(self):
+        result, calls, _ = self.run_picker(
+            ['--preview', 'remove', REF_A, 'App One', 'Description', '[installed]', '', 'user'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [['flatpak', 'info', '--user', REF_A]])
+        self.assertIn('Installation    : User', result.stdout)
 
     def test_remove_failure_is_preserved(self):
         result, _, _ = self.run_picker('remove', UNINSTALL_EXIT='9')
@@ -260,19 +328,29 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(calls, [])
 
-    def test_update_all_only_invokes_system_update(self):
+    def test_update_all_invokes_both_scopes(self):
         for extra in ({}, {'NO_UPDATES': '1'}, {'NO_REMOTE': '1'}):
             with self.subTest(extra=extra):
                 result, calls, _ = self.run_picker('update', **extra)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(calls, [['flatpak', 'update', '--system', '--assumeyes']])
+                self.assertEqual(calls, [['flatpak', 'update', '--system', '--assumeyes'],
+                                         ['flatpak', 'update', '--user', '--assumeyes']])
 
     def test_update_failure_status_and_output(self):
         result, calls, _ = self.run_picker('update', UPDATE_EXIT='8')
         self.assertEqual(result.returncode, 8)
-        self.assertEqual(calls, [['flatpak', 'update', '--system', '--assumeyes']])
+        self.assertEqual(calls, [['flatpak', 'update', '--system', '--assumeyes'],
+                                         ['flatpak', 'update', '--user', '--assumeyes']])
         self.assertIn('update did not complete successfully', result.stderr)
         self.assertNotIn('Flatpak finished', result.stdout)
+
+    def test_update_user_failure_is_preserved(self):
+        result, calls, _ = self.run_picker('update', USER_UPDATE_EXIT='9')
+        self.assertEqual(result.returncode, 9)
+        self.assertEqual(calls, [['flatpak', 'update', '--system', '--assumeyes'],
+                                 ['flatpak', 'update', '--user', '--assumeyes']])
+        self.assertNotIn('Flatpak finished', result.stdout)
+
 
 
 class InstallerTests(unittest.TestCase):

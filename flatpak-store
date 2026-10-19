@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Install, remove, or update applications in the system installation.
+# Install, remove, and update applications in system and user installations.
 set -euo pipefail
 
 # fzf invokes this mode for the highlighted row; it only reads app metadata.
 show_preview() {
-  local action=$1 ref=$2 name=$3 description=$4 installed=$5 metadata
+  local action=$1 ref=$2 name=$3 description=$4 installed=$5 remote=${6:-flathub} scope=${7:-system} metadata
   [[ $action == install || $action == remove ]] || return 2
   [[ $ref =~ ^app/[A-Za-z0-9._-]+/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$ ]] || return 2
+  [[ $scope == system || $scope == user ]] || return 2
   local app_id arch branch
   IFS=/ read -r _ app_id arch branch <<<"$ref"
-  local -a query=(info --system "$ref")
-  if [[ $action == install ]]; then query=(remote-info --system --cached flathub "$ref"); fi
+  local -a query=(info "--$scope" "$ref")
+  if [[ $action == install ]]; then query=(remote-info "--$scope" --cached "$remote" "$ref"); fi
   local status='Not installed' details_error=0
   if [[ $action == remove || -n $installed ]]; then status=Installed; fi
   metadata=$(LC_ALL=C timeout 15s flatpak "${query[@]}" 2>&1) || details_error=1
@@ -24,8 +25,8 @@ show_preview() {
   fi
   printf '%-15s : %s\n' 'Description' "${description:-Not provided}" \
     'Application ID' "$app_id" 'Architecture' "$arch" 'Branch' "$branch" \
-    'Installation' 'System' 'Status' "$status"
-  if [[ $action == install ]]; then printf '%-15s : %s\n' 'Repository' 'flathub'; fi
+    'Installation' "${scope^}" 'Status' "$status"
+  if [[ $action == install ]]; then printf '%-15s : %s\n' 'Repository' "$remote"; fi
   if (( details_error == 0 )); then
     printf '%s\n' "$metadata" | awk '
       /^[[:space:]]*(License|Origin|Installed Size|Runtime|Sdk|Date):/ {
@@ -42,66 +43,77 @@ show_preview() {
 }
 
 if [[ ${1:-} == --preview ]]; then
-  [[ $# == 6 ]] || exit 2
-  show_preview "$2" "$3" "$4" "$5" "$6"
+  [[ $# == 6 || $# == 7 || $# == 8 ]] || exit 2
+  show_preview "$2" "$3" "$4" "$5" "$6" "${7:-flathub}" "${8:-system}"
   exit
 fi
 
 load_install_catalog() {
-  if ! flatpak remotes --system --columns=name >"$work_dir/remotes"; then
-    printf 'Could not read system Flatpak remotes.\n' >&2
-    exit 1
-  fi
-  if ! awk '$0 == "flathub" { found=1 } END { exit !found }' "$work_dir/remotes"; then
-    printf '%s\n' 'System Flathub is not configured. Add it with:' \
-      'flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo' >&2
-    exit 1
-  fi
-
-  catalog_options=(--system --app '--columns=ref,name,description')
   catalog_notice=''
-  if ! timeout --foreground 45s flatpak remote-ls \
-      "${catalog_options[@]}" flathub >"$work_dir/catalog"; then
-    printf 'Could not refresh Flathub. Trying the local cache…\n' >&2
-    if ! timeout --foreground 15s flatpak remote-ls \
-        "${catalog_options[@]}" --cached flathub >"$work_dir/catalog"; then
-      printf 'No catalog available. Check your connection and try again.\n' >&2
+  : >"$work_dir/catalog"
+  : >"$work_dir/installed"
+  for scope in system user; do
+    if ! flatpak remotes "--$scope" --columns=name >"$work_dir/remotes"; then
+      printf 'Could not read %s Flatpak remotes.\n' "$scope" >&2
       exit 1
     fi
-    catalog_notice='OFFLINE / STALE CACHE · Flathub · installation needs a connection'
-  fi
+    while IFS= read -r remote; do
+      [[ $remote =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { printf 'Invalid remote name.\n' >&2; exit 1; }
+      catalog_options=("--$scope" --app '--columns=ref,name,description')
+      if ! timeout --foreground 45s flatpak remote-ls \
+          "${catalog_options[@]}" "$remote" >"$work_dir/remote-catalog"; then
+        printf 'Could not refresh %s (%s). Trying the local cache…\n' "$remote" "$scope" >&2
+        if ! timeout --foreground 15s flatpak remote-ls \
+            "${catalog_options[@]}" --cached "$remote" >"$work_dir/remote-catalog"; then
+          printf 'No catalog available for %s (%s). Check your connection and try again.\n' "$remote" "$scope" >&2
+          exit 1
+        fi
+        catalog_notice='OFFLINE / STALE CACHE · installation needs a connection'
+      fi
+      awk -v remote="$remote" -v scope="$scope" '{ print $0 "\t" remote "\t" scope }' \
+        "$work_dir/remote-catalog" >>"$work_dir/catalog"
+    done <"$work_dir/remotes"
+    if ! flatpak list "--$scope" --app --columns=ref >"$work_dir/scope-installed"; then
+      printf 'Could not determine installed %s apps. Resolve the Flatpak error and try again.\n' "$scope" >&2
+      exit 1
+    fi
+    awk -v scope="$scope" '{ print $0 "\t" scope }' "$work_dir/scope-installed" >>"$work_dir/installed"
+  done
   if [[ ! -s $work_dir/catalog ]]; then
-    printf 'Flathub returned no applications. Check the remote and try again.\n' >&2
-    exit 1
-  fi
-  if ! flatpak list --system --app --columns=ref >"$work_dir/installed"; then
-    printf 'Could not determine installed apps. Try again after resolving the Flatpak error.\n' >&2
+    printf 'No applications available from configured system or user remotes. Add a remote with flatpak remote-add.\n' >&2
     exit 1
   fi
 
-  # flatpak list omits the app/ prefix that remote-ls includes.
+  # Match installed refs within their installation scope.
   awk -F '\t' 'FILENAME == ARGV[1] {
-    ref=$1; sub(/^app\//, "", ref); installed[ref]=1; next
+    ref=$1; sub(/^app\//, "", ref); installed[$2 SUBSEP ref]=1; next
   } {
     ref=$1; sub(/^app\//, "", ref)
-    printf "%s\t%s\t%s\t%s\n", $1, $2, $3, (ref in installed ? "[installed]" : "")
+    printf "%s\t%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, (($5 SUBSEP ref) in installed ? "[installed]" : ""), $4, $5
   }' "$work_dir/installed" "$work_dir/catalog" >"$work_dir/rows"
 }
 
 load_catalog() {
   if [[ $mode == remove ]]; then
-    if ! flatpak list \
-        --system --app --columns=ref,name,description >"$work_dir/installed"; then
-      printf 'Could not list installed apps. Resolve the Flatpak error and try again.\n' >&2
-      exit 1
-    fi
-    if [[ ! -s $work_dir/installed ]]; then
-      printf 'No system Flatpak applications are installed.\n' >&2
+    : >"$work_dir/catalog"
+    for scope in system user; do
+      if ! flatpak list \
+          "--$scope" --app --columns=ref,name,description >"$work_dir/installed"; then
+        printf 'Could not list installed apps (%s). Resolve the Flatpak error and try again.\n' "$scope" >&2
+        exit 1
+      fi
+      # Keep scope with each exact ref, including apps installed in both scopes.
+      awk -F '\t' -v scope="$scope" 'BEGIN { OFS="\t" } {
+        ref=$1; if (ref !~ /^app\//) ref="app/" ref
+        print ref, $2, $3, "", scope
+      }' "$work_dir/installed" >>"$work_dir/catalog"
+    done
+    if [[ ! -s $work_dir/catalog ]]; then
+      printf 'No system or user Flatpak applications are installed.\n' >&2
       exit 0
     fi
-    # Normalize list output to the full app refs used for validation and removal.
-    awk '{ if ($0 !~ /^app\//) printf "app/"; print }' "$work_dir/installed" >"$work_dir/catalog"
-    cp "$work_dir/catalog" "$work_dir/rows"
+    awk -F '\t' 'BEGIN { OFS="\t" } { print $1, $2, $3, "[installed]", $4, $5 }' \
+      "$work_dir/catalog" >"$work_dir/rows"
     catalog_notice=''
   else
     load_install_catalog
@@ -117,7 +129,7 @@ load_catalog() {
       name=($2 == "" ? ref[2] : $2)
       if (action == "install" && $4 != "") name=name "  ✓"
       if (ref[4] != "stable") name=name " [" ref[4] "]"
-      printf "%s\t%s\t%s\t%s\t%-28s\t%s%s  · %s%s\n", $1, $2, $3, $4, name, dim, $3, ref[2], reset
+      printf "%s\t%s\t%s\t%s\t%-28s\t%s%s  · %s%s%s\t%s\t%s\n", $1, $2, $3, $4, name, dim, $3, ref[2], (action == "install" ? " · " $5 " (" $6 ")" : " · " $6), reset, $5, $6
     }
   ' "$work_dir/sorted" >"$work_dir/display"
   # The load event runs after EOF, so this action is ready before fzf uses it.
@@ -166,9 +178,9 @@ mode=install
 case ${1:-} in
   --help|-h)
     printf '%s\n' 'Usage: flatpak-store [remove|update]' \
-      'Default: search and install system Flathub apps.' \
-      'remove: select installed system apps for removal; saved app data is retained.' \
-      'update: update all system apps and runtimes without confirmation.' \
+      'Default: search and install apps from all configured system and user remotes.' \
+      'remove: select installed system and user apps for removal; saved app data is retained.' \
+      'update: update all system and user apps and runtimes without confirmation.' \
       'Search matches app names only. Tab selects, Escape cancels.' \
       'Enter installs immediately or opens Flatpak removal confirmation.'
     exit 0 ;;
@@ -184,14 +196,19 @@ if [[ $mode == update ]]; then
     printf 'Missing dependency: flatpak\nInstall it with: omarchy pkg add flatpak\n' >&2
     exit 1
   fi
-  printf 'Updating system Flatpak apps and runtimes…\n'
-  if flatpak update --system --assumeyes; then
-    printf '\nFlatpak finished.\n'
-  else
-    status=$?
-    printf '\nFlatpak update did not complete successfully (exit %s). See the details above.\n' "$status" >&2
-    exit "$status"
-  fi
+  update_status=0
+  for scope in system user; do
+    printf 'Updating %s Flatpak apps and runtimes…\n' "$scope"
+    if flatpak update "--$scope" --assumeyes; then
+      :
+    else
+      status=$?
+      printf '\nFlatpak %s update did not complete successfully (exit %s). See the details above.\n' "$scope" "$status" >&2
+      if [[ $update_status == 0 ]]; then update_status=$status; fi
+    fi
+  done
+  if [[ $update_status != 0 ]]; then exit "$update_status"; fi
+  printf '\nFlatpak finished.\n'
   exit 0
 fi
 
@@ -204,14 +221,12 @@ done
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/flatpak-store.XXXXXXXX")
 script_path=$(readlink -f -- "${BASH_SOURCE[0]}")
-printf -v preview '%q --preview %q {1} {2} {3} {4}' "$script_path" "$mode"
+printf -v preview '%q --preview %q {1} {2} {3} {4} {7} {8}' "$script_path" "$mode"
 printf -v loaded_action 'cat %q' "$work_dir/loaded-action"
 if [[ $mode == remove ]]; then
   picker_color='pointer:red,marker:red'
-  operation=(uninstall --system --app)
 else
   picker_color='pointer:green,marker:green'
-  operation=(install --system --assumeyes flathub)
 fi
 
 # Open fzf while the pipe is still empty: its own loading spinner animates next
@@ -268,18 +283,52 @@ fi
 pause_on_exit=1
 
 declare -A available=() seen=()
-while IFS=$'\t' read -r ref _; do available["$ref"]=1; done <"$work_dir/catalog"
+while IFS= read -r catalog_row; do
+  ref=${catalog_row%%$'\t'*}
+  scope=${catalog_row##*$'\t'}
+  catalog_row=${catalog_row%$'\t'*}
+  remote=${catalog_row##*$'\t'}
+  if [[ $mode == install ]]; then available["$scope|$remote|$ref"]=1; else available["$scope|$ref"]=1; fi
+done <"$work_dir/catalog"
 refs=()
-while IFS=$'\t' read -r ref _; do
-  if [[ ! $ref =~ ^app/[A-Za-z0-9._-]+/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$ || ! ${available[$ref]:-} ]]; then
+remotes=()
+scopes=()
+while IFS= read -r selected; do
+  ref=${selected%%$'\t'*}
+  scope=${selected##*$'\t'}
+  selected=${selected%$'\t'*}
+  remote=${selected##*$'\t'}
+  key="$scope|$ref"
+  if [[ $mode == install ]]; then key="$scope|$remote|$ref"; fi
+  if [[ ! $ref =~ ^app/[A-Za-z0-9._-]+/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$ || ! ${available[$key]:-} ]]; then
     printf 'Invalid selection; no applications were changed.\n' >&2
     exit 1
   fi
-  if [[ ! ${seen[$ref]:-} ]]; then refs+=("$ref"); seen["$ref"]=1; fi
+  if [[ ! ${seen[$key]:-} ]]; then refs+=("$ref"); remotes+=("$remote"); scopes+=("$scope"); seen["$key"]=1; fi
 done <"$work_dir/selected"
 [[ ${#refs[@]} -gt 0 ]] || exit 0
 
-if flatpak "${operation[@]}" "${refs[@]}"; then
+run_operation() {
+  local remote scope group index
+  local -A completed=()
+  local -a matching
+  for group in "${!refs[@]}"; do
+    remote=${remotes[$group]}
+    scope=${scopes[$group]}
+    [[ ! ${completed[$scope|$remote]:-} ]] || continue
+    completed[$scope|$remote]=1
+    matching=()
+    for index in "${!refs[@]}"; do
+      if [[ ${remotes[$index]} == "$remote" && ${scopes[$index]} == "$scope" ]]; then matching+=("${refs[$index]}"); fi
+    done
+    if [[ $mode == remove ]]; then
+      flatpak uninstall "--$scope" --app "${matching[@]}" || return $?
+    else
+      flatpak install "--$scope" --assumeyes "$remote" "${matching[@]}" || return $?
+    fi
+  done
+}
+if run_operation; then
   printf '\nFlatpak finished.\n'
 else
   status=$?

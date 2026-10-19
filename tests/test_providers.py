@@ -145,6 +145,13 @@ class ProviderTests(unittest.TestCase):
                           ('gamma', 'cask', False), ('owner/tap/beta', 'formula', False),
                           ('owner/tap/delta', 'cask', False), ('python@3.13', 'formula', False)])
 
+    def test_brew_installs_added_tap_formula_and_cask_by_qualified_name(self):
+        result, calls = self.run_store(choices=('4,5',))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.transactions(calls), [
+            ['brew', 'install', '--formula', 'owner/tap/beta'],
+            ['brew', 'install', '--cask', 'owner/tap/delta']])
+
     def test_brew_token_existing_as_both_kinds_installs_each(self):
         result, calls = self.run_store(choices=('0,1',))
         self.assertEqual(result.returncode, 0, result.stderr)

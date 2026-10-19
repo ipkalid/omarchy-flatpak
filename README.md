@@ -6,7 +6,7 @@ Use the provider tabs (or Left/Right) to switch between them.
 
 | Provider | Install | Remove | Update All |
 | --- | --- | --- | --- |
-| Flatpak | Browse system Flathub apps | Select system apps; keep saved data | Update system apps and runtimes |
+| Flatpak | Browse apps from system and user remotes | Select system and user apps; keep saved data | Update system and user apps and runtimes |
 | Brew | Browse Homebrew formulae and casks | Select installed formulae and casks and confirm | Refresh metadata, then upgrade packages |
 | mise | Choose a tool, then Latest or an exact version | Choose a tool, then installed versions and confirm | Not provided |
 
@@ -54,7 +54,7 @@ as does menu setup. Catalog lookups use GNU `timeout`.
 
 ```sh
 omarchy pkg add flatpak fzf python mise
-# Only needed for Flatpak installation if system Flathub is missing:
+# Example: add Flathub if you have no system remote configured:
 flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 ```
 
@@ -77,8 +77,8 @@ requirement, and **Check again** re-enables actions once it is available.
 
 Flatpak Update All needs only Flatpak and Bash; Brew Update All needs Brew and
 Python. Removal reads local installed-package information and does not fetch an
-installation catalog. Flatpak updates cover every system remote; user-only
-Flatpak installations remain outside this version's scope.
+installation catalog. Flatpak search includes system and user remotes and installs
+into the selected repository’s scope. Removal and Update All also cover both system and user installations.
 
 ## Controls and behavior
 
@@ -108,11 +108,12 @@ for the highlighted formula; descriptions already available locally appear in ro
 The picker opens immediately with fzf’s native spinner beside `0/0`, an empty
 app list, and the preview pane, just like the AUR picker. You can type a search
 or press Escape while the catalog loads. Escape also stops the pending lookup.
-Flatpak installation waits up to 45 seconds for the Flathub catalog, then tries a local
+Flatpak installation searches all configured system and user remotes and shows each result’s repository. It waits up to 45 seconds per remote, then tries a local
 cache with a visible stale-data notice. Previews time out after 15 seconds.
 Flatpak removal preserves saved app data and does not force removal or separately
 clean up unused runtimes. Flatpak Install and Update All use `--assumeyes` to skip
-confirmation. Flatpak Update All runs `flatpak update --system --assumeyes`. Errors and completed
+confirmation. Flatpak Update All runs `flatpak update --system --assumeyes` and
+`flatpak update --user --assumeyes`, attempting both even if one fails. Errors and completed
 operations remain visible until Enter is pressed.
 
 Brew and mise catalog queries time out after 45 seconds each; Brew previews time
@@ -175,7 +176,7 @@ the selected provider.
 ## CLI and shell interface
 
 Run the bundled `flatpak-store` with no argument to install, `remove` to uninstall,
-or `update` to update all system apps and runtimes.
+or `update` to update all system and user apps and runtimes.
 
 ```sh
 omarchy-shell shell summon ipkalid.flatpak-store '{"action":"install"}'
