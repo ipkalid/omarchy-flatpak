@@ -58,7 +58,8 @@ elif args[0] == 'remote-ls':
     if os.environ.get('OFFLINE') and '--cached' not in args:
         print('Network unavailable', file=sys.stderr); sys.exit(1)
     if os.environ.get('NO_CACHE') and '--cached' in args: sys.exit(1)
-    if not os.environ.get('EMPTY_CATALOG'): print(os.environ['CATALOG'], end='')
+    if not os.environ.get('EMPTY_CATALOG'):
+        print(os.environ.get('USER_CATALOG', os.environ['CATALOG']) if '--user' in args else os.environ['CATALOG'], end='')
 elif args[0] == 'list':
     if os.environ.get('LIST_ERROR'): sys.exit(1)
     if '--columns=ref,name,description' in args:
@@ -175,13 +176,13 @@ class PickerTests(unittest.TestCase):
                 self.assertEqual(self.loaded_action, 'abort')
                 self.assertFalse(any(c[:2] == ['flatpak', 'install'] for c in calls))
 
-    def test_all_remotes_keep_duplicate_refs_and_install_from_each_origin(self):
+    def test_all_remotes_are_searched_and_duplicate_refs_appear_once(self):
         result, calls, rows = self.run_picker(REMOTES='flathub\nexample')
         self.assertEqual(result.returncode, 0, result.stderr)
         for remote in ('flathub', 'example'):
-            self.assertIn(['flatpak', 'install', '--system', '--assumeyes', remote, REF_A, REF_B], calls)
-            self.assertIn(' · ' + remote, rows)
-        self.assertEqual(len(rows.splitlines()), 4)
+            self.assertTrue(any(c[:2] == ['flatpak', 'remote-ls'] and c[-1] == remote for c in calls))
+        self.assertIn(['flatpak', 'install', '--system', '--assumeyes', 'flathub', REF_A, REF_B], calls)
+        self.assertEqual(len(rows.splitlines()), 2)
 
     def test_non_flathub_remote_is_sufficient(self):
         result, calls, _ = self.run_picker(REMOTES='example')
@@ -195,13 +196,21 @@ class PickerTests(unittest.TestCase):
         self.assertIn('personal (user)', rows)
         self.assertNotIn('[installed]', rows)
 
-    def test_same_remote_and_ref_in_both_scopes_stay_distinct(self):
+    def test_install_prefers_user_when_available_in_both_scopes(self):
         result, calls, rows = self.run_picker(USER_REMOTES='flathub', PICK='duplicate')
         self.assertEqual(result.returncode, 0, result.stderr)
-        for scope in ('system', 'user'):
-            self.assertEqual(calls.count(['flatpak', 'install', '--' + scope, '--assumeyes', 'flathub', REF_A, REF_B]), 1)
-        self.assertEqual(len(rows.splitlines()), 4)
-        self.assertEqual(rows.count('[installed]'), 1)
+        self.assertEqual(calls.count(['flatpak', 'install', '--user', '--assumeyes', 'flathub', REF_A, REF_B]), 1)
+        self.assertFalse(any(c[:3] == ['flatpak', 'install', '--system'] for c in calls))
+        self.assertEqual(len(rows.splitlines()), 2)
+        self.assertNotIn('[installed]', rows)
+
+    def test_install_falls_back_to_system_for_refs_missing_in_user_repos(self):
+        user_catalog = CATALOG.splitlines(keepends=True)[0]
+        result, calls, rows = self.run_picker(USER_REMOTES='personal', USER_CATALOG=user_catalog)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(['flatpak', 'install', '--user', '--assumeyes', 'personal', REF_A], calls)
+        self.assertIn(['flatpak', 'install', '--system', '--assumeyes', 'flathub', REF_B], calls)
+        self.assertEqual(len(rows.splitlines()), 2)
 
     def test_user_preview_uses_user_remote(self):
         result, calls, _ = self.run_picker(

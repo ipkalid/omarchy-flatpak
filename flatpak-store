@@ -84,6 +84,16 @@ load_install_catalog() {
     exit 1
   fi
 
+  # Prefer a user source for each exact ref; retain system-only refs.
+  # Architecture and branch remain distinct install choices.
+  awk -F '\t' 'NR == FNR {
+    if ($5 == "user") user[$1]=1
+    next
+  }
+  ($5 == "user" || !($1 in user)) && !seen[$1]++ { print }
+  ' "$work_dir/catalog" "$work_dir/catalog" >"$work_dir/preferred-catalog"
+  mv "$work_dir/preferred-catalog" "$work_dir/catalog"
+
   # Match installed refs within their installation scope.
   awk -F '\t' 'FILENAME == ARGV[1] {
     ref=$1; sub(/^app\//, "", ref); installed[$2 SUBSEP ref]=1; next

@@ -78,7 +78,8 @@ requirement, and **Check again** re-enables actions once it is available.
 Flatpak Update All needs only Flatpak and Bash; Brew Update All needs Brew and
 Python. Removal reads local installed-package information and does not fetch an
 installation catalog. Flatpak search includes system and user remotes and installs
-into the selected repository’s scope. Removal and Update All also cover both system and user installations.
+into the selected repository’s scope. Install shows each exact app reference once,
+preferring a user repository and falling back to system when unavailable for the user. Removal and Update All also cover both system and user installations.
 
 ## Controls and behavior
 
